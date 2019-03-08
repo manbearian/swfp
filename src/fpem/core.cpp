@@ -117,7 +117,7 @@ void validate_add()
     }
     cout << "okay!" << endl;
 
-    cout << "testing a neg+pos denormals...";
+    cout << "testing a neg+pos normals...";
     {
         float start1 = -100.0f;
         float start2 = 100.0f;
@@ -133,10 +133,13 @@ void validate_add()
                 validate_add(x, y);
             }
         }
+        validate_add(std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+        validate_add(std::numeric_limits<float>::max(), -(std::numeric_limits<float>::max() / 2));
+        validate_add((std::numeric_limits<float>::max() / 2), -std::numeric_limits<float>::max());
     }
     cout << "okay!" << endl;
 
-    cout << "testing a pos+neg denormals...";
+    cout << "testing a pos+neg normals...";
     {
         float start1 = 100.0f;
         float start2 = -100.0f;
@@ -155,9 +158,6 @@ void validate_add()
     }
     cout << "okay!" << endl;
 
-
-
-
     cout << "testing values far apart...";
     {
         float start1 = 1.0f;
@@ -174,6 +174,7 @@ void validate_add()
                 validate_add(x, y);
             }
         }
+        validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::min());
     }
     cout << "okay!" << endl;
 
@@ -196,21 +197,53 @@ void validate_add()
     }
     cout << "okay!" << endl;
 
+    cout << "testing values that go to infinity...";
+    validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+    validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::max() / 2);
+    validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::max() / 1000);
+    validate_add(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+    validate_add(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() / 2);
+    validate_add(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() / 1000);
+    cout << "okay!" << endl;
+
+    cout << "testing special values...";
+    {
+        float values[] = { 0.0f, 1.0f,
+            std::numeric_limits<float>::max() / 2,
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::min(),
+            std::numeric_limits<float>::min() / 2,
+            std::numeric_limits<float>::infinity(),
+            std::numeric_limits<float>::quiet_NaN(),
+            std::numeric_limits<float>::signaling_NaN() };
+
+
+        for (int i = 0; i < _countof(values); ++i) {
+            for (int j = 0; j < _countof(values); ++j) {
+                validate_add(values[i], values[j]);
+                validate_add(-values[i], values[j]);
+                validate_add(values[i], -values[j]);
+                validate_add(-values[i], -values[j]);
+            }
+        }
+    }
+    cout << "okay!" << endl;
+
 }
 
 int main()
 {
     try
     {
-#if 1
+#if 0
         validate_add();
 #else
-        int i = 0xbf800040;
-        int j = 0xc348007f;
+        int i = 0xbf800000;
+        int j = 0x800000;
         float x = *(float*)&i;
         float y = *(float*)&j;
-        //float x = -2.0f;
-        //float y = 1.0f;
+        //float x = std::numeric_limits<float>::max();
+        //float y = std::numeric_limits<float>::max();
         validate_add(x, y);
 #endif
     }

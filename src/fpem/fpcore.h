@@ -60,7 +60,8 @@ public:
     static constexpr uint_t bitsize = sizeof(uint_t) * 8;
     static constexpr uint_t exponent_bitsize = fp_traits::exponent_bitsize;
     static constexpr uint_t significand_bitsize = bitsize - exponent_bitsize - 1;
-    static constexpr uint_t exponent_mask = (1 << exponent_bitsize) - 1;
+    static constexpr uint_t exponent_mask = (uint_t(1) << exponent_bitsize) - 1;
+    static constexpr uint_t significand_mask = (uint_t(1) << significand_bitsize) - 1;
     static constexpr int_t bias = fp_traits::bias;
     static constexpr int_t emax = bias;
     static constexpr int_t emin = 1 - emax;
@@ -141,13 +142,100 @@ private:
     // decrease significand by N power-of-two
     // handles underflow with flush-to-zero
     // rounds value (to-neareset)
-    static uint_t decrease_significand(uint_t& significand, int amount)
+    enum class bits_kind { zero = 0, low, mid, high };
+    static bits_kind decrease_significand(uint_t& significand, int amount)
     {
+        if (amount > sizeof(uint_t)*8) {
+            auto result = significand == 0 ? bits_kind::zero : bits_kind::low;
+            significand = 0;
+            return result;
+        }
+
         uint_t mask = (uint_t(1) << amount) - 1;
+        uint_t midpoint = uint_t(1) << (amount - 1);
         uint_t shifted_out_value = significand & mask;
+
         significand >>= amount;
 
-        return shifted_out_value;
+        if (shifted_out_value == 0) {
+            return bits_kind::zero;
+        }
+        if (shifted_out_value > midpoint) {
+            return bits_kind::high;
+        }
+        if (shifted_out_value < midpoint) {
+            return bits_kind::low;
+        }
+
+        return bits_kind::mid;
+    }
+
+    static void round_signficant(uint_t &significand, bits_kind roundoff_bits)
+    {
+        // IEEE794 says to treat value as infinite long and then round-to-nearest
+        // we know the signficand bits that cannot be represented so use them to
+        // round the value we're keeping up or down
+        if (roundoff_bits == bits_kind::high) {
+            significand++; // round-up
+        }
+        else if (roundoff_bits == bits_kind::mid) {
+            significand += (significand & 1); // round-to-even
+        }
+    }
+
+    // number of bits significand needs to shift to get implied-one
+    // into the right position. Positive means left shift.
+    static int32_t signficand_adjustment(uint_t significand)
+    {
+        // index of the implied leading `1.`
+        constexpr unsigned long keybit = significand_bitsize;
+
+        unsigned long index;
+        if constexpr (sizeof(uint_t) <= 4) {
+            if (!_BitScanReverse(&index, significand)) {
+                return keybit;
+            }
+        }
+        else if constexpr (sizeof(uint_t) == 8) {
+            if (!_BitScanReverse64(&index, significand)) {
+                return keybit;
+            }
+        }
+        else {
+            static_assert(false, "NYI: signficand_adjustment for this size");
+        }
+
+        return keybit - index;
+    }
+
+    // increase the exponent value and report if overflow occured
+    static bool increase_exponent(int32_t& exponent, uint_t amount)
+    {
+        exponent += amount;
+
+        if (exponent > emax) {
+            exponent = exponent_mask;
+            return true;
+        }
+
+        return false;
+    }
+
+    // decrease the exponent value and report if underflow occure
+    // if return value is non-zero underflow occured--the value
+    // returned is the amount of the underflow.
+    static int decrease_exponent(int32_t& exponent, uint_t amount)
+    {
+        exponent -= amount;
+
+        int diff = exponent - emin;
+
+        if (diff < 0) {
+            exponent = 0;
+            return -diff;
+        }
+
+        return 0;
     }
 
     //
@@ -207,50 +295,62 @@ private:
 
     static floatbase_t compose(const fp_components &components)
     {
-        uint_t sign = components.sign;
-        uint_t exponent = components.exponent;
+        auto sign = components.sign;
+        auto exponent = components.exponent;
         auto significand = components.significand;
 
         // finite, non-zero values need special care
         if ((components.exponent != exponent_mask)
             && !(components.exponent == 0 && components.significand == 0))
         {
-            // underflow, decrease exponent and add 0s
-            while ((significand < (uint_t(1) << (significand_bitsize + 1)))
-                && (exponent != emin))
-            {
-                // transfer power-of-two from exponent to significand
-                exponent--;
-                significand <<= 1;
-            }
+            int distance = signficand_adjustment(significand);
+            bool is_normal = true;
 
-            // check for overflow, increase exponent are remove sig-digits until appropriate
-            while (significand >= (uint_t(1) << (significand_bitsize + 1)))
+            if (distance > 0)
             {
-                // transfer power-of-two from significand to exponent
-                exponent++;
-                if (decrease_significand(significand, 1)) {
-                    significand += (significand & 1); // round-to-even
+                // underflow--decrease exponent and fill signficand with 0s
+                if (int underflow_amount = decrease_exponent(exponent, distance))
+                {
+                    // underflow in exponent -> change to denormal
+                    significand <<= distance - underflow_amount;
+                    is_normal = false;
+                }
+                else
+                {
+                    significand <<= distance;
+                }
+            }
+            else if (distance < 0)
+            {
+                // overflow--increase exponent and round signficand
+                auto roundoff_bitsize = -distance;
+                if (increase_exponent(exponent, roundoff_bitsize))
+                {
+                    // overflow in exponent -> change to infinity
+                    significand = 0;
+                    is_normal = false;
+                }
+                else
+                {
+                    auto roundoff_bits = decrease_significand(significand, roundoff_bitsize);
+                    round_signficant(significand, roundoff_bits);
                 }
             }
 
-            // mask off implied topbit
-            if (significand >= (uint_t(1) << significand_bitsize))
+            if (is_normal)
             {
-                // normal
-                assert((significand & (~((uint_t(1) << (significand_bitsize + 2)) - 1))) == 0); // no higher bits should be set
-                significand &= ((uint_t(1) << significand_bitsize) - 1);
+                // mask off implied leading 1.
+                assert((~significand_mask & significand) == (significand_mask+1)); // only implied bit set outside of significand
+                significand &= significand_mask;
 
-                // todo: validate exponent before adding bias
+                // encode exponent with bias
                 exponent += bias;
-            }
-            else
-            {
-                // subnormal
-                exponent = 0;
             }
         }
 
+        assert(sign == 1 || sign == 0);
+        assert((significand & significand_mask) == significand);
+        assert(exponent >= 0 && exponent <= exponent_mask);
         return floatbase_t{ (sign << (bitsize - 1)) | (exponent << significand_bitsize) | significand };
     }
 
@@ -266,37 +366,47 @@ public:
         fp_components r = addend.decompose();
 
         if (l.class_ == fp_class::zero) {
+            if (r.class_ == fp_class::zero && (r.sign != l.sign)) {
+                return floatbase_t{};
+            }
+            return addend;
+        }
+        else if (r.class_ == fp_class::zero) {
+            return *this;
+        }
+
+        if (l.class_ == fp_class::nan) {
+            return *this;
+        }
+        else if (r.class_ == fp_class::nan) {
             return addend;
         }
 
-        if (r.class_ == fp_class::zero) {
-            return *this;
-        }
-
         if (l.class_ == fp_class::infinity) {
+            if (r.class_ == fp_class::infinity && (r.sign != l.sign)) {
+                return floatbase_t{ (1 << (bitsize - 1)) | (exponent_mask << significand_bitsize) | 0x400000 };
+            }
             return *this;
         }
-
-        if (r.class_ == fp_class::infinity) {
+        else if (r.class_ == fp_class::infinity) {
             return addend;
         }
 
         fp_components sum;
 
-        uint_t roundoff_bits = 0;
-        int roundoff_bitsize = 0;
+        bits_kind roundoff_bits = bits_kind::zero;
 
         // make exponents match
         auto exponent_diff = l.exponent - r.exponent;
         if (exponent_diff > 0)
         {
-            roundoff_bitsize = exponent_diff;
+            auto roundoff_bitsize = exponent_diff;
             r.exponent += roundoff_bitsize;
             roundoff_bits = decrease_significand(r.significand, roundoff_bitsize);
         }
         else if (exponent_diff < 0)
         {
-            roundoff_bitsize = -exponent_diff;
+            auto roundoff_bitsize = -exponent_diff;
             l.exponent += roundoff_bitsize;
             roundoff_bits = decrease_significand(l.significand, roundoff_bitsize);
         }
@@ -309,6 +419,7 @@ public:
             {
                 sum.significand = l.significand - r.significand;
                 sum.sign = l.sign;
+
             }
             else if (l.significand < r.significand)
             {
@@ -318,24 +429,40 @@ public:
             else
             {
                 // a - a => 0
-                return floatbase_t{};
+                return floatbase_t{ 0 };
+            }
+
+            if (roundoff_bits != bits_kind::zero)
+            {
+                // we have round-off bits in the subtrahend
+                // subtracting out these bits would cause a borrow, so simulate this by subtracing 1
+                sum.significand--;
+
+                // invert the reaminder bits
+                if (roundoff_bits == bits_kind::high)
+                    roundoff_bits = bits_kind::low;
+                else if (roundoff_bits == bits_kind::low)
+                    roundoff_bits = bits_kind::high;
+
+                if ((sum.significand & (significand_mask + 1)) == 0) {
+                    // if we subtracted off the leading one, shift over and fill in the LSB
+                    // todo: move this into compose?
+                    sum.significand <<= 1;
+                    if (roundoff_bits == bits_kind::mid || roundoff_bits == bits_kind::high) {
+                        sum.significand |= 1;
+                    }
+                    sum.exponent--;
+                }
+                else {
+                    // round the value
+                    round_signficant(sum.significand, roundoff_bits);
+                }
             }
         }
         else
         {
             sum.significand = l.significand + r.significand;
-
-            // IEEE794 says to treat value as infinite long and then round-to-nearest
-            // we know the signficand bits that cannot be represented so use them to
-            // round the value we're keeping up or down
-            uint_t midpoint = uint_t(1) << (roundoff_bitsize - 1);
-            if (roundoff_bits > midpoint) {
-                sum.significand++; // round-up
-            }
-            else if (roundoff_bits == midpoint) {
-                sum.significand += (sum.significand & 1); // round-to-even
-            }
-
+            round_signficant(sum.significand, roundoff_bits);
             sum.sign = l.sign;
         }
 

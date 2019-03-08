@@ -1,0 +1,1 @@
+ -EHsc -std:c++17 -Zi -W4 core.cpp
