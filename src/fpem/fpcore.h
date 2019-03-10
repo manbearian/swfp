@@ -5,6 +5,7 @@
 #include <sstream>
 #include <assert.h>
 #include <algorithm>
+#include <intrin.h>
 
 enum class fp_format
 {
@@ -52,38 +53,38 @@ class floatbase_t
 {
 private:
     using fp_traits = fp_traits<format>;
-public:
+
     using uint_t = typename fp_traits::uint_t;
     using int_t = std::make_signed_t<uint_t>;
     using hwfp_t = typename fp_traits::hwfp_t;
+
+    using exponent_t = int32_t; // use signed ints for performance for exponent
+    using uexponent_t = std::make_unsigned_t<exponent_t>;
 
     static constexpr uint_t bitsize = sizeof(uint_t) * 8;
     static constexpr uint_t exponent_bitsize = fp_traits::exponent_bitsize;
     static constexpr uint_t significand_bitsize = bitsize - exponent_bitsize - 1;
     static constexpr uint_t exponent_mask = (uint_t(1) << exponent_bitsize) - 1;
     static constexpr uint_t significand_mask = (uint_t(1) << significand_bitsize) - 1;
+    static constexpr uint_t sign_mask = uint_t(1) << (bitsize - 1);
     static constexpr int_t bias = fp_traits::bias;
     static constexpr int_t emax = bias;
     static constexpr int_t emin = 1 - emax;
 
 private:
+
     uint_t raw_value;
 
-public:
 
     //
     // construction
     //
 
+public:
+
     // default to 0 value
     floatbase_t() : raw_value(0) { }
 
-    // initialize from raw bits
-    explicit floatbase_t(uint_t val) {
-        static_assert(sizeof(uint_t) == sizeof(*this));
-        memcpy(this, &val, sizeof(uint_t));
-    }
-    
     // initialize from any floating-point type
     template<typename T = hwfp_t, typename = std::enable_if_t<std::is_floating_point_v<T>>>
     floatbase_t(T fval)
@@ -97,6 +98,20 @@ public:
             static_assert(false, "NYI: initiailization for this type");
         }  
     }
+
+private:
+    // initialize from raw bits
+    explicit constexpr floatbase_t(uint_t val) :
+        raw_value(val)
+    { }
+
+    explicit constexpr floatbase_t(uint_t sign, uint_t exponent, uint_t significand) :
+        raw_value((sign << (bitsize-1)) | (exponent << significand_bitsize) | significand)
+    { }
+    explicit constexpr floatbase_t(uint_t sign, exponent_t exponent, uint_t significand) :
+        floatbase_t(sign, static_cast<uexponent_t>(exponent), significand)
+    { }
+
 
     //
     // convert to floating hw point type
@@ -138,7 +153,7 @@ public:
     //
 
 private:
-    
+
     // decrease significand by N power-of-two
     // handles underflow with flush-to-zero
     // rounds value (to-neareset)
@@ -248,7 +263,7 @@ private:
     struct fp_components { 
         fp_class class_;
         uint8_t sign;
-        int32_t exponent;   // save some space for large fp (binary128 has only 15 bits)
+        exponent_t exponent;
         uint_t significand;
     };
 
@@ -312,7 +327,20 @@ private:
                 if (int underflow_amount = decrease_exponent(exponent, distance))
                 {
                     // underflow in exponent -> change to denormal
-                    significand <<= distance - underflow_amount;
+                    int shift_amount = distance - underflow_amount;
+
+                    if (shift_amount > 0) {
+                        assert((distance - underflow_amount) < significand_bitsize);
+                        significand <<= shift_amount;
+                    }
+                    else if (shift_amount < 0) {
+                        if (-shift_amount < (sizeof(significand)*8)) {
+                            significand >>= -shift_amount;
+                        }
+                        else {
+                            significand = 0;
+                        }
+                    }
                     is_normal = false;
                 }
                 else
@@ -351,8 +379,17 @@ private:
         assert(sign == 1 || sign == 0);
         assert((significand & significand_mask) == significand);
         assert(exponent >= 0 && exponent <= exponent_mask);
-        return floatbase_t{ (sign << (bitsize - 1)) | (exponent << significand_bitsize) | significand };
+        return floatbase_t{ sign, exponent, significand };
     }
+
+    static constexpr floatbase_t indeterminate_nan() {
+        return floatbase_t{ 1, exponent_mask, 0x400000 };
+    }
+
+    static constexpr floatbase_t infinity() {
+        return floatbase_t{ 0, exponent_mask, 0};
+    }
+
 
     //
     // arithmetic
@@ -365,6 +402,13 @@ public:
         fp_components l = this->decompose();
         fp_components r = addend.decompose();
 
+        if (l.class_ == fp_class::nan) {
+            return *this;
+        }
+        else if (r.class_ == fp_class::nan) {
+            return addend;
+        }
+
         if (l.class_ == fp_class::zero) {
             if (r.class_ == fp_class::zero && (r.sign != l.sign)) {
                 return floatbase_t{};
@@ -375,16 +419,9 @@ public:
             return *this;
         }
 
-        if (l.class_ == fp_class::nan) {
-            return *this;
-        }
-        else if (r.class_ == fp_class::nan) {
-            return addend;
-        }
-
         if (l.class_ == fp_class::infinity) {
             if (r.class_ == fp_class::infinity && (r.sign != l.sign)) {
-                return floatbase_t{ (1 << (bitsize - 1)) | (exponent_mask << significand_bitsize) | 0x400000 };
+                return indeterminate_nan();
             }
             return *this;
         }
@@ -440,13 +477,23 @@ public:
 
                 // invert the reaminder bits
                 if (roundoff_bits == bits_kind::high)
+                {
                     roundoff_bits = bits_kind::low;
+                }
                 else if (roundoff_bits == bits_kind::low)
+                {
                     roundoff_bits = bits_kind::high;
+                }
 
-                if ((sum.significand & (significand_mask + 1)) == 0) {
+                if ((roundoff_bits == bits_kind::mid)
+                    && (sum.significand & (significand_mask + 1)) == 0)
+                {
                     // if we subtracted off the leading one, shift over and fill in the LSB
-                    // todo: move this into compose?
+                    // the "roundoff_bits" are exactly equal to 1000..., so shft left should
+                    // fill in that one bit.
+                    // TODO: does this happens if the signficands are equal and exponent is off-by-one
+                    //  this is just "x - x/2" so could just hard code return "x/2"?
+                    // TOOD this speical caase bothers me... is this full of bugs?
                     sum.significand <<= 1;
                     if (roundoff_bits == bits_kind::mid || roundoff_bits == bits_kind::high) {
                         sum.significand |= 1;
@@ -467,6 +514,176 @@ public:
         }
 
         return compose(sum);
+    }
+
+    floatbase_t operator-(floatbase_t addend)
+    {
+        // TODO: optimize this...
+        fp_components l = this->decompose();
+        fp_components r = addend.decompose();
+
+        if (l.class_ == fp_class::nan) {
+            return *this;
+        }
+        else if (r.class_ == fp_class::nan) {
+            return addend;
+        }
+
+        return this->operator+(-addend);
+    }
+
+
+    floatbase_t xor_sign(floatbase_t other)
+    {
+        return floatbase_t{ new_value };
+    }
+
+    floatbase_t operator*(floatbase_t addend)
+    {
+        fp_components l = this->decompose();
+        fp_components r = addend.decompose();
+
+        if (l.class_ == fp_class::nan) {
+            return *this;
+        }
+        else if (r.class_ == fp_class::nan) {
+            return addend;
+        }
+
+        if (l.class_ == fp_class::infinity) {
+            if (r.class_ == fp_class::zero) {
+                return indeterminate_nan();
+            }
+            this->raw_value ^= (sign_mask & addend.raw_value);
+            return *this;
+        }
+        else if (r.class_ == fp_class::infinity) {
+            if (l.class_ == fp_class::zero) {
+                return indeterminate_nan();
+            }
+            addend.raw_value ^= (sign_mask & this->raw_value);
+            return addend;
+        }
+
+        uint8_t sign = l.sign ^ r.sign;
+
+        if (l.class_ == fp_class::zero || r.class_ == fp_class::zero) {
+            return floatbase_t{ sign, 0, 0};
+        }
+
+        exponent_t exponent = l.exponent + r.exponent;
+
+        if (exponent > emax) {
+            // overfow -> infinity
+            return floatbase_t{ sign, exponent_mask, 0 };
+        }
+        else if (exponent < emin) {
+            // underflow -> zero
+            return floatbase_t{ sign, 0, 0 };
+        }
+ 
+        constexpr uint_t midpoint = uint_t(1) << (significand_bitsize - 1);
+        uint_t significand = 0;
+        uint_t roundoff_bits = 0;
+
+        if constexpr (sizeof(uint_t) == 2) {
+            uint32_t z = uint32_t(l.significand) * uint32_t(r.significand);
+            roundoff_bits = static_cast<uint_t>(z & significand_mask);
+            significand = static_cast<uint_t>(z >> significand_bitsize);
+        }
+        else if constexpr (sizeof(uint_t) == 4) {
+            uint64_t z = uint64_t(l.significand) * uint64_t(r.significand);
+            roundoff_bits = static_cast<uint_t>(z & significand_mask);
+            significand = static_cast<uint_t>(z >> significand_bitsize);
+        }
+        else if constexpr (sizeof(uint_t) == 8) {
+            constexpr auto bitdiff = bitsize - significand_bitsize;
+            uint64_t zhi, z = _umul128(x, y, &zhi);
+            roundoff_bits = static_cast<uint_t>(z & significand_mask);
+            significand = (zhi << bitdiff) | (z >> significand_bitsize);
+        }
+        else {
+            static_assert(false, "NYI: signficand_adjustment for this size");
+        }
+
+        if (significand == 0)
+        {
+            significand = roundoff_bits;
+            roundoff_bits = 0;
+
+            if (decrease_exponent(exponent, significand_bitsize)) {
+                // there are no interesting bits...
+                return floatbase_t{ sign, 0, 0 };
+            }
+
+            // fallthrough and continue adjustment
+        }
+
+        // there should be an intersting bit somewhere (since we weeded out zero multiplicands)
+        assert(significand != 0);
+
+        int distance = signficand_adjustment(significand);
+
+        if (distance > 0)
+        {
+            // underflow in signficand (there was a denormal in the input)
+
+            if (int underflow_amount = decrease_exponent(exponent, distance))
+            {
+                // underflow in exponent -> result is a denormal
+                distance -= underflow_amount;
+
+                if (distance < 0) {
+                    return floatbase_t{ sign };
+                }
+                else if (distance == 0) {
+                    return floatbase_t{ sign, 0, significand };
+                }
+            }
+
+            // shift signficand up and pull in bits from roundoff
+            significand <<= distance;
+            significand |= (roundoff_bits >> (significand_bitsize - distance));
+            roundoff_bits = (roundoff_bits << distance) & significand_mask;
+        }
+        else if (distance < 0)
+        {
+            // max signficands can overflow only by a single bit
+            assert(distance == -1);
+
+            // move the LSB from product to roundoff
+            if (significand & 1) {
+                roundoff_bits |= uint_t(1) << significand_bitsize;
+            }
+            significand >>= 1;
+            roundoff_bits >>= 1;
+            if (increase_exponent(exponent, 1)) {
+                // overflow: infinity
+                significand = 0;
+            }
+        }
+
+        if (roundoff_bits > midpoint)
+            significand++;
+        else if (roundoff_bits == midpoint)
+            significand += (significand & 1); // round-to-even
+
+        if (exponent == emin) {
+            exponent = 0; // denomral
+        }
+        else {
+            significand &= significand_mask;
+            exponent += bias;
+        }
+
+        return floatbase_t{ sign, exponent, significand };
+    }
+
+    floatbase_t operator-()
+    {
+        floatbase_t neg = *this;
+        neg.raw_value ^= (uint_t(1) << (bitsize - 1));
+        return neg;
     }
 };
 

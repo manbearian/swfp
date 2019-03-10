@@ -2,39 +2,89 @@
 #include <stdint.h>
 #include <iostream>
 #include <memory>
+#include <string>
 
 #include <limits>
 
 #include "fpcore.h"
 
+// disbale constant arithmetic warnings
+#pragma warning(disable:4756)
 
 using std::cout;
 using std::endl;
 
-void validate_add(float a, float b)
+template<typename T>
+struct validate_base
 {
-    float c = a + b;
-    float32_t x = a;
-    float32_t y = b;
-    float32_t z = x + y;
-
-    if (memcmp((char*)&c, (char*)&z, sizeof(float)) != 0)
+    static void check_binary(float a, float b, float c, float32_t x, float32_t y, float32_t z)
     {
-        cout << "addition failed!" << endl;
-        cout << "x: " << a << " " << x.to_hex_string() << " " << x.to_triplet_string() << endl;
-        cout << "y: " << b << " " << y.to_hex_string() << " " << y.to_triplet_string() << endl;
+        if (memcmp((char*)&c, (char*)&z, sizeof(float)) != 0)
+        {
+            cout << "failed!" << endl;
+            cout << "x: " << a << " " << x.to_hex_string() << " " << x.to_triplet_string() << endl;
+            cout << "y: " << b << " " << y.to_hex_string() << " " << y.to_triplet_string() << endl;
 
-        float32_t z_ = c;
-        cout << "expected: " << c << " " << z_.to_hex_string() << " " << z_.to_triplet_string() << endl;
-        cout << "actual:   " << (float)z << " " << z.to_hex_string() << " " << z.to_triplet_string() << endl;
+            float32_t z_ = c;
+            cout << "expected: " << c << " " << z_.to_hex_string() << " " << z_.to_triplet_string() << endl;
+            cout << "actual:   " << (float)z << " " << z.to_hex_string() << " " << z.to_triplet_string() << endl;
 
-        throw std::exception("Failure: 'add'");
+            auto err = std::string{ "Failure: '" } + T::name() + "'";
+            throw std::exception(err.c_str());
+        }
     }
-}
+};
 
-void validate_add()
+struct validate_add : public validate_base<validate_add>
 {
-    cout << "Validating 'add'" << endl;
+    static std::string name() { return "add"; }
+
+    static void validate(float a, float b)
+    {
+        float c = a + b;
+        float32_t x = a;
+        float32_t y = b;
+        float32_t z = x + y;
+
+        check_binary(a, b, c, x, y, z);
+    }
+};
+
+struct validate_sub : public validate_base<validate_sub>
+{
+    static std::string name() { return "sub"; }
+
+    static void validate(float a, float b)
+    {
+        float c = a - b;
+        float32_t x = a;
+        float32_t y = b;
+        float32_t z = x - y;
+
+        check_binary(a, b, c, x, y, z);
+    }
+};
+
+struct validate_mul : public validate_base<validate_mul>
+{
+    static std::string name() { return "mul"; }
+
+    static void validate(float a, float b)
+    {
+        float c = a * b;
+        float32_t x = a;
+        float32_t y = b;
+        float32_t z = x * y;
+
+        check_binary(a, b, c, x, y, z);
+    }
+};
+
+
+template<typename T>
+void validate()
+{
+    cout << "Validating '" << T::name() << "'" << endl;
 
     // testing all values is too slow
     // test some suggested values
@@ -45,7 +95,7 @@ void validate_add()
         for (uint32_t j = 0x7f; j < 0x0fff; ++j) {
             float x = *(float *)&i;
             float y = *(float *)&j;
-            validate_add(x, y);
+            T::validate(x, y);
         }
     }
     cout << "okay!" << endl;
@@ -55,7 +105,7 @@ void validate_add()
         for (uint32_t j = 0x8000007f; j < 0x80000fff; ++j) {
             float x = *(float *)&i;
             float y = *(float *)&j;
-            validate_add(x, y);
+            T::validate(x, y);
         }
     }
     cout << "okay!" << endl;
@@ -65,7 +115,7 @@ void validate_add()
         for (uint32_t j = 1; j < 0xff; ++j) {
             float x = *(float *)&i;
             float y = *(float *)&j;
-            validate_add(x, y);
+            T::validate(x, y);
         }
     }
     cout << "okay!" << endl;
@@ -75,7 +125,7 @@ void validate_add()
         for (uint32_t j = 0x80000001; j < 0x800000ff; ++j) {
             float x = *(float *)&i;
             float y = *(float *)&j;
-            validate_add(x, y);
+            T::validate(x, y);
         }
     }
     cout << "okay!" << endl;
@@ -91,7 +141,7 @@ void validate_add()
                 uint32_t y_i = start_i + j;
                 float x = *(float *)&x_i;
                 float y = *(float *)&y_i;
-                validate_add(x, y);
+                T::validate(x, y);
             }
         }
     }
@@ -111,7 +161,7 @@ void validate_add()
                 uint32_t y_i = start_j + j;
                 float x = *(float *)&x_i;
                 float y = *(float *)&y_i;
-                validate_add(x, y);
+                T::validate(x, y);
             }
         }
     }
@@ -130,12 +180,12 @@ void validate_add()
                 uint32_t y_i = start_j + j;
                 float x = *(float *)&x_i;
                 float y = *(float *)&y_i;
-                validate_add(x, y);
+                T::validate(x, y);
             }
         }
-        validate_add(std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
-        validate_add(std::numeric_limits<float>::max(), -(std::numeric_limits<float>::max() / 2));
-        validate_add((std::numeric_limits<float>::max() / 2), -std::numeric_limits<float>::max());
+        T::validate(std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+        T::validate(std::numeric_limits<float>::max(), -(std::numeric_limits<float>::max() / 2));
+        T::validate((std::numeric_limits<float>::max() / 2), -std::numeric_limits<float>::max());
     }
     cout << "okay!" << endl;
 
@@ -152,7 +202,7 @@ void validate_add()
                 uint32_t y_i = start_j + j;
                 float x = *(float *)&x_i;
                 float y = *(float *)&y_i;
-                validate_add(x, y);
+                T::validate(x, y);
             }
         }
     }
@@ -171,10 +221,10 @@ void validate_add()
                 uint32_t y_i = start_j + j;
                 float x = *(float *)&x_i;
                 float y = *(float *)&y_i;
-                validate_add(x, y);
+                T::validate(x, y);
             }
         }
-        validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::min());
+        T::validate(std::numeric_limits<float>::max(), std::numeric_limits<float>::min());
     }
     cout << "okay!" << endl;
 
@@ -191,19 +241,19 @@ void validate_add()
                 uint32_t y_i = start_j + j;
                 float x = *(float *)&x_i;
                 float y = *(float *)&y_i;
-                validate_add(x, y);
+                T::validate(x, y);
             }
         }
     }
     cout << "okay!" << endl;
 
     cout << "testing values that go to infinity...";
-    validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-    validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::max() / 2);
-    validate_add(std::numeric_limits<float>::max(), std::numeric_limits<float>::max() / 1000);
-    validate_add(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
-    validate_add(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() / 2);
-    validate_add(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() / 1000);
+    T::validate(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+    T::validate(std::numeric_limits<float>::max(), std::numeric_limits<float>::max() / 2);
+    T::validate(std::numeric_limits<float>::max(), std::numeric_limits<float>::max() / 1000);
+    T::validate(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+    T::validate(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() / 2);
+    T::validate(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() / 1000);
     cout << "okay!" << endl;
 
     cout << "testing special values...";
@@ -220,31 +270,32 @@ void validate_add()
 
         for (int i = 0; i < _countof(values); ++i) {
             for (int j = 0; j < _countof(values); ++j) {
-                validate_add(values[i], values[j]);
-                validate_add(-values[i], values[j]);
-                validate_add(values[i], -values[j]);
-                validate_add(-values[i], -values[j]);
+                T::validate(values[i], values[j]);
+                T::validate(-values[i], values[j]);
+                T::validate(values[i], -values[j]);
+                T::validate(-values[i], -values[j]);
             }
         }
     }
     cout << "okay!" << endl;
-
 }
 
 int main()
 {
     try
     {
-#if 0
-        validate_add();
+#if 1
+        validate<validate_add>();
+        validate<validate_sub>();
+        validate<validate_mul>();
 #else
-        int i = 0xbf800000;
-        int j = 0x800000;
+        int i = 0x3f800000;
+        int j = 0x400000;
         float x = *(float*)&i;
         float y = *(float*)&j;
         //float x = std::numeric_limits<float>::max();
         //float y = std::numeric_limits<float>::max();
-        validate_add(x, y);
+        validate_mul::validate(-x, y);
 #endif
     }
     catch (std::exception e)
