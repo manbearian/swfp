@@ -80,6 +80,21 @@ struct validate_mul : public validate_base<validate_mul>
     }
 };
 
+struct validate_div : public validate_base<validate_div>
+{
+    static std::string name() { return "div"; }
+
+    static void validate(float a, float b)
+    {
+        float c = a / b;
+        float32_t x = a;
+        float32_t y = b;
+        float32_t z = x / y;
+
+        check_binary(a, b, c, x, y, z);
+    }
+};
+
 
 template<typename T>
 void validate()
@@ -288,6 +303,7 @@ int main()
         validate<validate_add>();
         validate<validate_sub>();
         validate<validate_mul>();
+        validate<validate_div>();
 #else
         int i = 0x3f800000;
         int j = 0x400000;
@@ -295,7 +311,7 @@ int main()
         float y = *(float*)&j;
         //float x = std::numeric_limits<float>::max();
         //float y = std::numeric_limits<float>::max();
-        validate_mul::validate(-x, y);
+        validate_div::validate(x, y);
 #endif
     }
     catch (std::exception e)

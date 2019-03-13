@@ -659,7 +659,7 @@ public:
             roundoff_bits >>= 1;
             if (increase_exponent(exponent, 1)) {
                 // overflow: infinity
-                significand = 0;
+                return floatbase_t{ sign, exponent_mask, 0 };
             }
         }
 
@@ -673,6 +673,128 @@ public:
         }
         else {
             significand &= significand_mask;
+            exponent += bias;
+        }
+
+        return floatbase_t{ sign, exponent, significand };
+    }
+
+    uint_t long_division(int_t& dividend, int_t divisor)
+    {
+        int_t quotient = 0;
+
+        for (int i = significand_bitsize; dividend && i >= 0; --i)
+        {
+            if (dividend < divisor) {
+                dividend <<= 1;
+                continue;
+            }
+
+            auto result = std::div(dividend, divisor);
+
+            quotient |= (result.quot << i);
+
+            dividend = result.rem << 1;
+        }
+
+        return static_cast<uint_t>(quotient);
+    }
+
+    floatbase_t operator/(floatbase_t denomenator)
+    {
+        fp_components l = this->decompose();
+        fp_components r = denomenator.decompose();
+
+        if (l.class_ == fp_class::nan) {
+            return *this;
+        }
+        else if (r.class_ == fp_class::nan) {
+            return denomenator;
+        }
+
+        uint8_t sign = l.sign ^ r.sign;
+
+        if (l.class_ == fp_class::zero) {
+            if (r.class_ == fp_class::zero) {
+                return indeterminate_nan();
+            }
+            return floatbase_t{ sign, 0, 0 };
+        }
+        else if (r.class_ == fp_class::zero) {
+            // 1/0 -> infinity
+            return floatbase_t{ sign, exponent_mask, 0 };
+        }
+
+        exponent_t exponent = l.exponent - r.exponent;
+
+        int_t dividend = static_cast<int_t>(l.significand);
+        int_t divisor = static_cast<int_t>(r.significand);
+
+        if (exponent > emax) {
+            // overfow -> infinity
+            return floatbase_t{ sign, exponent_mask, 0 };
+        }
+        
+        while (exponent < emin) {
+            dividend >>= 1;
+            exponent++;
+            if (dividend == 0) {
+                // underflow -> zero
+                return floatbase_t{ sign, 0, 0 };
+            }
+        }
+ 
+        // ensure we compute exactly the right amount of significand digits
+        while ((dividend < divisor) && (exponent != emin)) {
+            dividend <<= 1;
+            --exponent;
+            continue;
+        }
+
+        uint_t significand = long_division(dividend, divisor);
+        uint_t roundoff_bits = long_division(dividend, divisor);
+
+
+        int distance = signficand_adjustment(significand);
+
+        if (distance < 0)
+        {
+            auto shift_amount = -distance;
+
+            uint_t shift_out = significand & ((uint_t(1) << shift_amount) - 1);
+            significand >>= shift_amount;
+            roundoff_bits >>= shift_amount;
+            roundoff_bits |= shift_out << (significand_bitsize - shift_amount + 1);
+            if (increase_exponent(exponent, shift_amount)) {
+                // overflow: infinity
+                return floatbase_t{ sign, exponent_mask, 0 };
+            }
+
+            distance = signficand_adjustment(roundoff_bits);
+            if (distance < 0) {
+                roundoff_bits >>= -distance;
+            }
+        }
+        else if (distance > 0)
+        {
+            // if distance is > 0, then this is a denromal
+            assert(exponent == emin);
+        }
+
+
+        constexpr uint_t midpoint = uint_t(1) << significand_bitsize;
+        if (roundoff_bits > midpoint) {
+            significand++; // round up
+        }
+        else if (roundoff_bits == midpoint) {
+            significand += (significand & 1); // round-to-even
+        }
+
+        if (exponent == emin) {
+            exponent = 0; // denomral
+        }
+        else {
+            significand &= significand_mask; // remove leading 1
             exponent += bias;
         }
 
