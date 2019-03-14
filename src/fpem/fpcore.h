@@ -664,11 +664,31 @@ public:
             dividend <<= 1;
         }
 
-        auto result = std::div(dividend, divisor);
-        quotient |= (result.quot << bit);
-        dividend = result.rem << 1;
+        if (dividend) {
+            auto result = std::div(dividend, divisor);
+            quotient |= (result.quot << bit);
+            dividend = result.rem << 1;
+        }
 
         while (dividend && (--bit >= 0))
+        {
+            if (dividend >= divisor) {
+                quotient |= (int_t(1) << bit);
+                dividend -= divisor;
+            }
+
+            dividend <<= 1;
+        }
+
+        return static_cast<uint_t>(quotient);
+    }
+
+
+    uint_t long_division2(int_t& dividend, int_t divisor)
+    {
+        int_t quotient = 0;
+
+        for (int bit = significand_bitsize; dividend && (bit >= 0); bit--)
         {
             if (dividend >= divisor) {
                 quotient |= (int_t(1) << bit);
@@ -751,7 +771,7 @@ public:
             return denormal(sign, significand);
         }
 
-        uint_t roundoff_bits = long_division(dividend, divisor);
+        uint_t roundoff_bits = long_division2(dividend, divisor);
 
         if (distance < 0)
         {
