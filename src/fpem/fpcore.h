@@ -496,8 +496,6 @@ public:
         // mask off implied leading 1.
         assert((~significand_mask & significand) == (significand_mask + 1)); // only implied bit set outside of significand
         significand &= significand_mask;
-
-        // encode exponent with bias
         exponent += bias;
 
         return floatbase_t{ sign, exponent, significand };
@@ -549,18 +547,16 @@ public:
         uint8_t sign = l.sign ^ r.sign;
 
         if (l.class_ == fp_class::zero || r.class_ == fp_class::zero) {
-            return floatbase_t{ sign, 0, 0};
+            return zero(sign);
         }
 
         exponent_t exponent = l.exponent + r.exponent;
 
         if (exponent > emax) {
-            // overfow -> infinity
-            return floatbase_t{ sign, exponent_mask, 0 };
+            return infinity(sign);
         }
         else if (exponent < emin) {
-            // underflow -> zero
-            return floatbase_t{ sign, 0, 0 };
+            return zero(sign);
         }
  
         constexpr uint_t midpoint = uint_t(1) << (significand_bitsize - 1);
@@ -594,7 +590,7 @@ public:
 
             if (decrease_exponent(exponent, significand_bitsize)) {
                 // there are no interesting bits...
-                return floatbase_t{ sign, 0, 0 };
+                return zero(sign);
             }
 
             // fallthrough and continue adjustment
@@ -615,7 +611,7 @@ public:
                 distance -= underflow_amount;
 
                 if (distance < 0) {
-                    return floatbase_t{ sign };
+                    return zero(sign);
                 }
                 else if (distance == 0) {
                     return floatbase_t{ sign, 0, significand };
@@ -639,8 +635,7 @@ public:
             significand >>= 1;
             roundoff_bits >>= 1;
             if (increase_exponent(exponent, 1)) {
-                // overflow: infinity
-                return floatbase_t{ sign, exponent_mask, 0 };
+                return infinity(sign);
             }
         }
 
@@ -659,18 +654,24 @@ public:
     {
         int_t quotient = 0;
 
-        for (int i = significand_bitsize; dividend && i >= 0; --i)
+        int bit = significand_bitsize;
+
+        while (dividend && (dividend < divisor) && (bit-- >= 0)) {
+            dividend <<= 1;
+        }
+
+        auto result = std::div(dividend, divisor);
+        quotient |= (result.quot << bit);
+        dividend = result.rem << 1;
+
+        while (dividend && (--bit >= 0))
         {
-            if (dividend < divisor) {
-                dividend <<= 1;
-                continue;
+            if (dividend >= divisor) {
+                quotient |= (int_t(1) << bit);
+                dividend -= divisor;
             }
 
-            auto result = std::div(dividend, divisor);
-
-            quotient |= (result.quot << i);
-
-            dividend = result.rem << 1;
+            dividend <<= 1;
         }
 
         return static_cast<uint_t>(quotient);
@@ -694,11 +695,20 @@ public:
             if (r.class_ == fp_class::zero) {
                 return indeterminate_nan();
             }
-            return floatbase_t{ sign, 0, 0 };
+            return zero(sign);
         }
         else if (r.class_ == fp_class::zero) {
-            // 1/0 -> infinity
-            return floatbase_t{ sign, exponent_mask, 0 };
+            return infinity(sign);
+        }
+
+        if (l.class_ == fp_class::infinity) {
+            if (r.class_ == fp_class::infinity) {
+                return indeterminate_nan();
+            }
+            return infinity(sign);
+        }
+        else if (r.class_ == fp_class::infinity) {
+            return zero(sign);
         }
 
         exponent_t exponent = l.exponent - r.exponent;
@@ -707,19 +717,17 @@ public:
         int_t divisor = static_cast<int_t>(r.significand);
 
         if (exponent > emax) {
-            // overfow -> infinity
-            return floatbase_t{ sign, exponent_mask, 0 };
+            return infinity(sign);
         }
         
         while (exponent < emin) {
-            dividend >>= 1;
             exponent++;
+            dividend >>= 1;
             if (dividend == 0) {
-                // underflow -> zero
-                return floatbase_t{ sign, 0, 0 };
+                return zero(sign);
             }
         }
- 
+
         // ensure we compute exactly the right amount of significand digits
         while ((dividend < divisor) && (exponent != emin)) {
             dividend <<= 1;
@@ -728,10 +736,16 @@ public:
         }
 
         uint_t significand = long_division(dividend, divisor);
-        uint_t roundoff_bits = long_division(dividend, divisor);
-
 
         int distance = signficand_adjustment(significand);
+
+        if (distance > 0)
+        {
+            assert(exponent == emin);
+            return floatbase_t{ sign, 0, significand };
+        }
+
+        uint_t roundoff_bits = long_division(dividend, divisor);
 
         if (distance < 0)
         {
@@ -742,8 +756,7 @@ public:
             roundoff_bits >>= shift_amount;
             roundoff_bits |= shift_out << (significand_bitsize - shift_amount + 1);
             if (increase_exponent(exponent, shift_amount)) {
-                // overflow: infinity
-                return floatbase_t{ sign, exponent_mask, 0 };
+                return infinity(sign);
             }
 
             distance = signficand_adjustment(roundoff_bits);
@@ -751,12 +764,6 @@ public:
                 roundoff_bits >>= -distance;
             }
         }
-        else if (distance > 0)
-        {
-            // if distance is > 0, then this is a denromal
-            assert(exponent == emin);
-        }
-
 
         constexpr uint_t midpoint = uint_t(1) << significand_bitsize;
         if (roundoff_bits > midpoint) {
@@ -766,13 +773,8 @@ public:
             significand += (significand & 1); // round-to-even
         }
 
-        if (exponent == emin) {
-            exponent = 0; // denomral
-        }
-        else {
-            significand &= significand_mask; // remove leading 1
-            exponent += bias;
-        }
+        significand &= significand_mask;
+        exponent += bias;
 
         return floatbase_t{ sign, exponent, significand };
     }
