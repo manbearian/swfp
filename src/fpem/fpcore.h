@@ -723,9 +723,10 @@ public:
         if (exponent > emax) {
             return infinity(sign);
         }
-        
+
+        // bring denormal inputs into range if possible
         while (exponent < emin) {
-            exponent++;
+            exponent++; // cannot overflow
             dividend >>= 1;
             if (dividend == 0) {
                 return zero(sign);
@@ -745,6 +746,7 @@ public:
 
         if (distance > 0)
         {
+            // TODO: do we need rounding bits here?
             assert(exponent == emin);
             return denormal(sign, significand);
         }
