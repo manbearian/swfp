@@ -325,6 +325,10 @@ private:
         return floatbase_t{ sign, 0, 0 };
     }
 
+    static constexpr floatbase_t denormal(uint8_t sign, uint_t significand) {
+        return floatbase_t{ sign, 0, significand };
+    }
+
 
     //
     // arithmetic
@@ -470,7 +474,7 @@ public:
                         return zero();
                     }
                 }
-                return floatbase_t{sign, 0, significand};
+                return denormal(sign, significand);
             }
             else
             {
@@ -614,7 +618,7 @@ public:
                     return zero(sign);
                 }
                 else if (distance == 0) {
-                    return floatbase_t{ sign, 0, significand };
+                    return denormal(sign, significand);
                 }
             }
 
@@ -742,7 +746,7 @@ public:
         if (distance > 0)
         {
             assert(exponent == emin);
-            return floatbase_t{ sign, 0, significand };
+            return denormal(sign, significand);
         }
 
         uint_t roundoff_bits = long_division(dividend, divisor);

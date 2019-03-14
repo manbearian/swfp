@@ -305,13 +305,11 @@ int main()
         validate<validate_mul>();
         validate<validate_div>();
 #else
-        int i = 0x3f800000;
-        int j = 0x400000;
-        float x = *(float*)&i;
-        float y = *(float*)&j;
-        //float x = std::numeric_limits<float>::max();
-        //float y = std::numeric_limits<float>::max();
-        validate_div::validate(x, y);
+        //int i = 0x3f800000;
+        //int j = 0x400000;
+        //float x = *(float*)&i;
+        //float y = *(float*)&j;
+        validate_div::validate(std::numeric_limits<float>::min(), 1.0f);
 #endif
     }
     catch (std::exception e)
