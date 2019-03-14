@@ -519,12 +519,6 @@ public:
         return this->operator+(-addend);
     }
 
-
-    floatbase_t xor_sign(floatbase_t other)
-    {
-        return floatbase_t{ new_value };
-    }
-
     floatbase_t operator*(floatbase_t addend)
     {
         fp_components l = this->decompose();
