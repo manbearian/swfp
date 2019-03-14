@@ -654,6 +654,7 @@ public:
         return floatbase_t{ sign, exponent, significand };
     }
 
+    // handle a division where the whole number portion can be > 1
     uint_t long_division(int_t& dividend, int_t divisor)
     {
         int_t quotient = 0;
@@ -664,31 +665,25 @@ public:
             dividend <<= 1;
         }
 
+        // compute the whole number portion
         if (dividend) {
             auto result = std::div(dividend, divisor);
-            quotient |= (result.quot << bit);
+            quotient = (result.quot << bit);
             dividend = result.rem << 1;
         }
 
-        while (dividend && (--bit >= 0))
-        {
-            if (dividend >= divisor) {
-                quotient |= (int_t(1) << bit);
-                dividend -= divisor;
-            }
-
-            dividend <<= 1;
-        }
+        // convert remainder into binary 
+        quotient |= remainder_division(dividend, divisor, bit-1);
 
         return static_cast<uint_t>(quotient);
     }
 
-
-    uint_t long_division2(int_t& dividend, int_t divisor)
+    // handle a division where the whole number portion is < 1
+    uint_t remainder_division(int_t& dividend, int_t divisor, int bitcount = significand_bitsize)
     {
         int_t quotient = 0;
 
-        for (int bit = significand_bitsize; dividend && (bit >= 0); bit--)
+        for (int bit = bitcount; dividend && (bit >= 0); bit--)
         {
             if (dividend >= divisor) {
                 quotient |= (int_t(1) << bit);
@@ -771,7 +766,7 @@ public:
             return denormal(sign, significand);
         }
 
-        uint_t roundoff_bits = long_division2(dividend, divisor);
+        uint_t roundoff_bits = remainder_division(dividend, divisor);
 
         if (distance < 0)
         {

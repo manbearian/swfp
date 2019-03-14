@@ -300,16 +300,16 @@ int main()
     try
     {
 #if 1
-        validate<validate_add>();
-        validate<validate_sub>();
-        validate<validate_mul>();
+        //validate<validate_add>();
+        //validate<validate_sub>();
+        //validate<validate_mul>();
         validate<validate_div>();
 #else
-        //int i = 0x3f800000;
-        //int j = 0x400000;
-        //float x = *(float*)&i;
-        //float y = *(float*)&j;
-        validate_div::validate(std::numeric_limits<float>::min(), 1.0f);
+        int i = 0x1;
+        int j = 0x7f;
+        float x = *(float*)&i;
+        float y = *(float*)&j;
+        validate_div::validate(x, y);
 #endif
     }
     catch (std::exception e)
