@@ -107,7 +107,12 @@ private:
 
     explicit constexpr floatbase_t(uint_t sign, uint_t exponent, uint_t significand) :
         raw_value((sign << (bitsize-1)) | (exponent << significand_bitsize) | significand)
-    { }
+    {
+        assert((sign & 1) == sign);
+        assert((significand & significand_mask) == significand);
+        assert((exponent & exponent_mask) == exponent);
+    }
+
     explicit constexpr floatbase_t(uint_t sign, exponent_t exponent, uint_t significand) :
         floatbase_t(sign, static_cast<uexponent_t>(exponent), significand)
     { }
@@ -308,86 +313,16 @@ private:
         return components;
     }
 
-    static floatbase_t compose(const fp_components &components)
-    {
-        auto sign = components.sign;
-        auto exponent = components.exponent;
-        auto significand = components.significand;
-
-        // finite, non-zero values need special care
-        if ((components.exponent != exponent_mask)
-            && !(components.exponent == 0 && components.significand == 0))
-        {
-            int distance = signficand_adjustment(significand);
-            bool is_normal = true;
-
-            if (distance > 0)
-            {
-                // underflow--decrease exponent and fill signficand with 0s
-                if (int underflow_amount = decrease_exponent(exponent, distance))
-                {
-                    // underflow in exponent -> change to denormal
-                    int shift_amount = distance - underflow_amount;
-
-                    if (shift_amount > 0) {
-                        assert((distance - underflow_amount) < significand_bitsize);
-                        significand <<= shift_amount;
-                    }
-                    else if (shift_amount < 0) {
-                        if (-shift_amount < (sizeof(significand)*8)) {
-                            significand >>= -shift_amount;
-                        }
-                        else {
-                            significand = 0;
-                        }
-                    }
-                    is_normal = false;
-                }
-                else
-                {
-                    significand <<= distance;
-                }
-            }
-            else if (distance < 0)
-            {
-                // overflow--increase exponent and round signficand
-                auto roundoff_bitsize = -distance;
-                if (increase_exponent(exponent, roundoff_bitsize))
-                {
-                    // overflow in exponent -> change to infinity
-                    significand = 0;
-                    is_normal = false;
-                }
-                else
-                {
-                    auto roundoff_bits = decrease_significand(significand, roundoff_bitsize);
-                    round_signficant(significand, roundoff_bits);
-                }
-            }
-
-            if (is_normal)
-            {
-                // mask off implied leading 1.
-                assert((~significand_mask & significand) == (significand_mask+1)); // only implied bit set outside of significand
-                significand &= significand_mask;
-
-                // encode exponent with bias
-                exponent += bias;
-            }
-        }
-
-        assert(sign == 1 || sign == 0);
-        assert((significand & significand_mask) == significand);
-        assert(exponent >= 0 && exponent <= exponent_mask);
-        return floatbase_t{ sign, exponent, significand };
-    }
-
     static constexpr floatbase_t indeterminate_nan() {
         return floatbase_t{ 1, exponent_mask, 0x400000 };
     }
 
-    static constexpr floatbase_t infinity() {
-        return floatbase_t{ 0, exponent_mask, 0};
+    static constexpr floatbase_t infinity(uint8_t sign = 0) {
+        return floatbase_t{ sign, exponent_mask, 0};
+    }
+
+    static constexpr floatbase_t zero(uint8_t sign = 0) {
+        return floatbase_t{ sign, 0, 0 };
     }
 
 
@@ -411,7 +346,7 @@ public:
 
         if (l.class_ == fp_class::zero) {
             if (r.class_ == fp_class::zero && (r.sign != l.sign)) {
-                return floatbase_t{};
+                return zero();
             }
             return addend;
         }
@@ -428,8 +363,6 @@ public:
         else if (r.class_ == fp_class::infinity) {
             return addend;
         }
-
-        fp_components sum;
 
         bits_kind roundoff_bits = bits_kind::zero;
 
@@ -448,32 +381,34 @@ public:
             roundoff_bits = decrease_significand(l.significand, roundoff_bitsize);
         }
 
-        sum.exponent = l.exponent;
+        uint8_t sign = 0;
+        exponent_t exponent = l.exponent;
+        uint_t significand = 0;
 
         if (l.sign != r.sign)
         {
             if (l.significand > r.significand)
             {
-                sum.significand = l.significand - r.significand;
-                sum.sign = l.sign;
+                significand = l.significand - r.significand;
+                sign = l.sign;
 
             }
             else if (l.significand < r.significand)
             {
-                sum.significand = r.significand - l.significand;
-                sum.sign = r.sign;
+                significand = r.significand - l.significand;
+                sign = r.sign;
             }
             else
             {
                 // a - a => 0
-                return floatbase_t{ 0 };
+                return zero();
             }
 
             if (roundoff_bits != bits_kind::zero)
             {
                 // we have round-off bits in the subtrahend
                 // subtracting out these bits would cause a borrow, so simulate this by subtracing 1
-                sum.significand--;
+                significand--;
 
                 // invert the reaminder bits
                 if (roundoff_bits == bits_kind::high)
@@ -486,34 +421,86 @@ public:
                 }
 
                 if ((roundoff_bits == bits_kind::mid)
-                    && (sum.significand & (significand_mask + 1)) == 0)
+                    && (significand & (significand_mask + 1)) == 0)
                 {
                     // if we subtracted off the leading one, shift over and fill in the LSB
-                    // the "roundoff_bits" are exactly equal to 1000..., so shft left should
+                    // the "roundoff_bits" are exactly equal to 1000..., so shift left should
                     // fill in that one bit.
                     // TODO: does this happens if the signficands are equal and exponent is off-by-one
                     //  this is just "x - x/2" so could just hard code return "x/2"?
                     // TOOD this speical caase bothers me... is this full of bugs?
-                    sum.significand <<= 1;
+                    significand <<= 1;
                     if (roundoff_bits == bits_kind::mid || roundoff_bits == bits_kind::high) {
-                        sum.significand |= 1;
+                        significand |= 1;
                     }
-                    sum.exponent--;
+                    exponent--;
                 }
                 else {
                     // round the value
-                    round_signficant(sum.significand, roundoff_bits);
+                    round_signficant(significand, roundoff_bits);
                 }
             }
         }
         else
         {
-            sum.significand = l.significand + r.significand;
-            round_signficant(sum.significand, roundoff_bits);
-            sum.sign = l.sign;
+            significand = l.significand + r.significand;
+            round_signficant(significand, roundoff_bits);
+            sign = l.sign;
         }
 
-        return compose(sum);
+        int distance = signficand_adjustment(significand);
+
+        if (distance > 0)
+        {
+            // underflow--decrease exponent and fill signficand with 0s
+            if (int underflow_amount = decrease_exponent(exponent, distance))
+            {
+                // underflow in exponent -> change to denormal
+                int shift_amount = distance - underflow_amount;
+
+                if (shift_amount > 0) {
+                    assert((distance - underflow_amount) < significand_bitsize);
+                    significand <<= shift_amount;
+                }
+                else if (shift_amount < 0) {
+                    if (-shift_amount < (sizeof(significand) * 8)) {
+                        significand >>= -shift_amount;
+                    }
+                    else {
+                        return zero();
+                    }
+                }
+                return floatbase_t{sign, 0, significand};
+            }
+            else
+            {
+                significand <<= distance;
+            }
+        }
+        else if (distance < 0)
+        {
+            // overflow--increase exponent and round signficand
+            auto roundoff_bitsize = -distance;
+            if (increase_exponent(exponent, roundoff_bitsize))
+            {
+                // overflow in exponent -> change to infinity
+                return infinity(sign);
+            }
+            else
+            {
+                auto roundoff_bits2 = decrease_significand(significand, roundoff_bitsize);
+                round_signficant(significand, roundoff_bits2);
+            }
+        }
+
+        // mask off implied leading 1.
+        assert((~significand_mask & significand) == (significand_mask + 1)); // only implied bit set outside of significand
+        significand &= significand_mask;
+
+        // encode exponent with bias
+        exponent += bias;
+
+        return floatbase_t{ sign, exponent, significand };
     }
 
     floatbase_t operator-(floatbase_t addend)
@@ -668,13 +655,8 @@ public:
         else if (roundoff_bits == midpoint)
             significand += (significand & 1); // round-to-even
 
-        if (exponent == emin) {
-            exponent = 0; // denomral
-        }
-        else {
-            significand &= significand_mask;
-            exponent += bias;
-        }
+        significand &= significand_mask;
+        exponent += bias;
 
         return floatbase_t{ sign, exponent, significand };
     }
