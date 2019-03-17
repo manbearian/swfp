@@ -82,8 +82,8 @@ private:
 
 public:
 
-    // default to 0 value
-    floatbase_t() : raw_value(0) { }
+    // default is uninit, just like built-in FP types
+    floatbase_t() = default;
 
     // initialize from any floating-point type
     template<typename T = hwfp_t, typename = std::enable_if_t<std::is_floating_point_v<T>>>
