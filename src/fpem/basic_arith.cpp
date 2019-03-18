@@ -273,7 +273,7 @@ void validate_arithmetic()
 
     cout << "testing special values...";
     {
-        float values[] = { 0.0f, 1.0f,
+        float values[] = { 0.0f, 1.0f, 2.0f,
             std::numeric_limits<float>::max() / 2,
             std::numeric_limits<float>::max(),
             std::numeric_limits<float>::min(),
