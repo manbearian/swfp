@@ -67,9 +67,14 @@ private:
     static constexpr uint_t exponent_mask = (uint_t(1) << exponent_bitsize) - 1;
     static constexpr uint_t significand_mask = (uint_t(1) << significand_bitsize) - 1;
     static constexpr uint_t sign_mask = uint_t(1) << (bitsize - 1);
-    static constexpr int_t bias = fp_traits::bias;
-    static constexpr int_t emax = bias;
-    static constexpr int_t emin = 1 - emax;
+    static constexpr exponent_t bias = fp_traits::bias;
+    static constexpr exponent_t emax = bias;
+    static constexpr exponent_t emin = 1 - emax;
+
+    friend floatbase_t<fp_format::binary16>;
+    friend floatbase_t<fp_format::binary32>;
+    friend floatbase_t<fp_format::binary64>;
+    friend floatbase_t<fp_format::binary128>;
 
 private:
 
@@ -85,18 +90,53 @@ public:
     // default is uninit, just like built-in FP types
     floatbase_t() = default;
 
-    // initialize from any floating-point type
-    template<typename T = hwfp_t, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-    floatbase_t(T fval)
+    //
+    // construction from hw fp types
+    //
+
+    template<typename T = hwfp_t, typename = std::enable_if_t<std::is_same_v<T, hwfp_t>> > // triggers SFINAE and disables ctor if hwfp_t is void
+    constexpr floatbase_t(T hwf) {
+        memcpy(&raw_value, &hwf, sizeof(T));
+    }
+
+    explicit constexpr floatbase_t(float hwf)
     {
-        if constexpr(!std::is_void_v<hwfp_t>) {
-            hwfp_t hwf = static_cast<hwfp_t>(fval);
-            static_assert(sizeof(hwfp_t) == sizeof(*this));
-            memcpy(this, &hwf, sizeof(hwfp_t));
+        if constexpr (format == fp_format::binary16)
+        {
+            *this = float16_t(float32_t(hwf));
         }
-        else {
-            static_assert(false, "NYI: initiailization for this type");
-        }  
+        else if constexpr (format == fp_format::binary32)
+        {
+            memcpy(&raw_value, &hwf, sizeof(float));
+        }
+        else if constexpr (format == fp_format::binary64)
+        {
+            *this = float64_t(float32_t(hwf));
+        }
+        else
+        {
+            static_assert(false, "nyi: convert from hw float32");
+        }
+    }
+
+    explicit constexpr floatbase_t(double hwf)
+    {
+        if constexpr (format == fp_format::binary16)
+        {
+            *this = float16_t(float64_t(hwf));
+        }
+        else if constexpr (format == fp_format::binary32)
+        {
+            *this = float32_t(float64_t(hwf));
+        }
+        else if constexpr (format == fp_format::binary64)
+        {
+            memcpy(&raw_value, &hwf, sizeof(float));
+        }
+        else
+        {
+            static_assert(false, "nyi: convert from hw float64");
+        }
     }
 
 private:
@@ -105,7 +145,7 @@ private:
         raw_value(val)
     { }
 
-    explicit constexpr floatbase_t(uint_t sign, uint_t exponent, uint_t significand) :
+    constexpr floatbase_t(uint_t sign, uint_t exponent, uint_t significand) :
         raw_value((sign << (bitsize-1)) | (exponent << significand_bitsize) | significand)
     {
         assert((sign & 1) == sign);
@@ -113,8 +153,8 @@ private:
         assert((exponent & exponent_mask) == exponent);
     }
 
-    explicit constexpr floatbase_t(uint_t sign, exponent_t exponent, uint_t significand) :
-        floatbase_t(sign, static_cast<uexponent_t>(exponent), significand)
+    constexpr floatbase_t(uint_t sign, exponent_t exponent, uint_t significand) :
+        floatbase_t(sign, static_cast<uint_t>(static_cast<uexponent_t>(exponent)), significand)
     { }
 
 
@@ -124,14 +164,149 @@ private:
 
 public:
 
-    template<typename T = hwfp_t, typename = std::enable_if_t<std::is_same_v<T, hwfp_t> && !std::is_void_v<hwfp_t>>>
-    explicit operator hwfp_t()
+    explicit operator float()
     {
-        hwfp_t hwf;
-        static_assert(sizeof(hwfp_t) == sizeof(*this));
-        memcpy(&hwf, this, sizeof(hwfp_t));
-        return hwf;
+        if constexpr (format == fp_format::binary32)
+        {
+            float hwf;
+            memcpy(&hwf, this, sizeof(float));
+            return hwf;
+        }
+        else
+        {
+            return float(float32_t(*this));
+        }
     }
+
+    explicit operator double()
+    {
+        if constexpr (format == fp_format::binary64)
+        {
+            double hwf;
+            memcpy(&hwf, this, sizeof(double));
+            return hwf;
+        }
+        else
+        {
+            return double(float64_t(*this));
+        }
+    }
+
+    template<typename T> typename T::uint_t widen_significand(uint_t significand) {
+        T::uint_t wide_significand = significand;
+        return wide_significand << (T::significand_bitsize - significand_bitsize);
+    }
+
+    template<typename T> typename T::uint_t narrow_significand(uint_t significand) {
+        significand >>= (significand_bitsize - T::significand_bitsize);
+        return static_cast<T::uint_t>(significand);
+    }
+    explicit operator floatbase_t<fp_format::binary16>()
+    {
+        static_assert(format != fp_format::binary16, "convert from T to T is impossible");
+
+        // convert from bigger FP to smaller FP
+        if constexpr (format == fp_format::binary32
+            || format == fp_format::binary64
+            || format == fp_format::binary128)
+        {
+            uint8_t sign = raw_value >> (bitsize - 1);
+            exponent_t exponent = (raw_value >> significand_bitsize) & exponent_mask;
+            uint_t significand = raw_value & significand_mask;
+
+            if (exponent == 0) {
+                // denormals round to 0
+                significand = 0;
+            }
+            else if (exponent == exponent_mask) {
+                exponent = float16_t::exponent_mask;
+                //if (significand == 0) {
+                //    return float16_t::infinity(sign);
+                //}
+                //else {
+                //    return float16_t::indeterminate_nan();
+                //}
+            }
+            else {
+                exponent -= bias;
+                significand |= (1 << significand_bitsize);
+
+                if (exponent < float16_t::emin) {
+                    while ((exponent < float16_t::emin) && significand) {
+                        // see if we can make this into a denormal
+                        exponent++;
+                        significand >>= 1;
+                    }
+                    exponent = 0;
+                }
+                else {
+                    exponent += float16_t::bias;
+                }
+            }
+
+            auto significand16 = narrow_significand<float16_t>(significand);
+            significand16 &= float16_t::significand_mask;
+
+            return float16_t{ sign, exponent, significand16 };
+        }
+        else
+        {
+            static_assert(false, "nyi: convert to hw float16");
+            return float16_t::indeterminate_nan();
+        }
+    }
+
+    explicit operator floatbase_t<fp_format::binary32>()
+    {
+        static_assert(format != fp_format::binary32, "convert from T to T is impossible");
+
+        // convert smaller FP to bigger FP
+        if constexpr (format == fp_format::binary16)
+        {
+            uint8_t sign = raw_value >> (bitsize-1);
+            exponent_t exponent = (raw_value >> significand_bitsize) & exponent_mask;
+            uint_t significand = raw_value & significand_mask;
+
+            if (exponent == 0) {
+                if (significand != 0) {
+                    exponent = emin;
+                    int distance = signficand_adjustment(significand);
+                    assert(distance > 0);
+                    significand <<= distance;
+                    exponent -= distance; // cannot underflow
+                    exponent += float32_t::bias;
+                }
+            }
+            else if (exponent == exponent_mask) {
+                exponent = float32_t::exponent_mask;
+                //if (significand == 0) {
+                //    return float32_t::infinity(sign);
+                //}
+                //else {
+                //    return float32_t::indeterminate_nan();
+                //}
+            }
+            else {
+                exponent -= bias;
+                exponent += float32_t::bias;
+            }
+
+            auto significand32 = widen_significand<float32_t>(significand);
+            return float32_t{sign, exponent, (significand32 & float32_t::significand_mask) };
+        }
+        else
+        {
+            static_assert(false, "nyi: convert to hw float32");
+            return float32_t::indeterminate_nan();
+        }
+    }
+
+    explicit operator floatbase_t<fp_format::binary64>()
+    {
+        static_assert(false, "nyi: convert to hw float64");
+        return float64_t::indeterminate_nan();
+    }
+
 
     //
     // printing utilites
@@ -288,7 +463,7 @@ private:
             }
             else
             {
-                components.exponent = (uint_t)emin;
+                components.exponent = emin;
                 components.class_ = fp_class::denormal;
             }
         }
@@ -313,8 +488,9 @@ private:
         return components;
     }
 
+public:
     static constexpr floatbase_t indeterminate_nan() {
-        return floatbase_t{ 1, exponent_mask, 0x400000 };
+        return floatbase_t{ 1, exponent_mask, uint_t(1) << (significand_bitsize-1) };
     }
 
     static constexpr floatbase_t infinity(uint8_t sign = 0) {
@@ -806,7 +982,42 @@ public:
         neg.raw_value ^= (uint_t(1) << (bitsize - 1));
         return neg;
     }
-};
+
+    //
+    // Comparison
+    //
+public:
+    bool operator==(floatbase_t other)
+    {
+        auto is_nan = [](uint_t x) {
+            return (((x & exponent_mask) >> significand_bitsize) == exponent_mask) && ((x & significand_mask) != 0);
+        };
+
+        if (this->raw_value == other.raw_value)
+        {
+            if (is_nan(this->raw_value) || is_nan(other.raw_value))
+                return false;
+            return true;
+        }
+        return false;
+    }
+
+    bool operator!=(floatbase_t other) { return !operator==(other); }
+
+
+    //
+    // public utitliy functions
+    //
+ public:
+
+     // publicly expose private constructors as factory functions. This is done
+     // to keep floatbase_t interface similar to built-in float/double while
+     // still allowing easy creation from integer values.
+     static floatbase_t from_bitstring(uint_t t) { return floatbase_t{ t }; }
+     static floatbase_t from_triplet(bool sign, exponent_t exponent, uint_t significand) {
+         return floatbase_t{ static_cast<uint_t>(sign), static_cast<uexponent_t>(exponent), significand };
+     }
+ };
 
 
 using float16_t = floatbase_t<fp_format::binary16>;
