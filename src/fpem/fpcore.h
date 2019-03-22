@@ -146,7 +146,7 @@ private:
     { }
 
     constexpr floatbase_t(uint_t sign, uint_t exponent, uint_t significand) :
-        raw_value((sign << (bitsize-1)) | (exponent << significand_bitsize) | significand)
+        raw_value((sign << (bitsize - 1)) | (exponent << significand_bitsize) | significand)
     {
         assert((sign & 1) == sign);
         assert((significand & significand_mask) == significand);
@@ -201,15 +201,23 @@ public:
     {
         constexpr auto bitdiff = significand_bitsize - T::significand_bitsize;
         constexpr auto mask = (uint_t(1) << bitdiff) - 1;
-        constexpr auto midpoint = uint_t(1) << (bitdiff-1);
-        constexpr auto overflow = uint_t(1) << (T::significand_bitsize+1);
+        constexpr auto midpoint = uint_t(1) << (bitdiff - 1);
+        constexpr auto overflow = uint_t(1) << (T::significand_bitsize + 1);
 
-        uint_t roundoff = significand & mask;
+        uint_t roundoff_bits = significand & mask;
         significand >>= bitdiff;
-        
-        if (roundoff > midpoint) {
+
+        // TODO: use round_significand here, but first must ensure roundoff_bits
+        // is aligned to MSB.
+#if 0
+        if (!round_significand(significand, exponent, roundoff_bits)) {
+            return infinity(sign);
+        }
+#else
+        if (roundoff_bits > midpoint) {
             significand++;
-        } else if (roundoff == midpoint) {
+        }
+        else if (roundoff_bits == midpoint) {
             significand += (significand & 1); // round-to-even
         }
 
@@ -218,6 +226,7 @@ public:
             exponent++;
             assert(exponent != T::exponent_mask); // TODO: overflow?
         }
+#endif
 
         return static_cast<T::uint_t>(significand);
     }
@@ -279,7 +288,7 @@ public:
         // convert smaller FP to bigger FP
         if constexpr (format == fp_format::binary16)
         {
-            uint8_t sign = raw_value >> (bitsize-1);
+            uint8_t sign = raw_value >> (bitsize - 1);
             exponent_t exponent = (raw_value >> significand_bitsize) & exponent_mask;
             uint_t significand = raw_value & significand_mask;
 
@@ -302,7 +311,7 @@ public:
             }
 
             auto significand32 = widen_significand<float32_t>(significand);
-            return float32_t{sign, exponent, (significand32 & float32_t::significand_mask) };
+            return float32_t{ sign, exponent, (significand32 & float32_t::significand_mask) };
         }
         else
         {
@@ -324,7 +333,7 @@ public:
 
 public:
 
-    std::string to_triplet_string() 
+    std::string to_triplet_string()
     {
         fp_components x = decompose();
         std::stringstream ss;
@@ -368,7 +377,8 @@ private:
         return shiftout_bits;
     }
 
-    static void round_signficant(uint_t &significand, uint_t roundoff_bits)
+    // round significand appropriately
+    static bool round_significand(uint_t &significand, exponent_t& exponent, uint_t roundoff_bits)
     {
         constexpr uint_t midpoint = uint_t(1) << (bitsize - 1);
 
@@ -381,6 +391,18 @@ private:
         else if (roundoff_bits == midpoint) {
             significand += (significand & 1); // round-to-even
         }
+
+        // rare case where all-ones is rounded-up and overflows
+        constexpr uint_t mask = uint_t(1) << (significand_bitsize + 1);
+        if (significand == mask) {
+            significand >>= 1;
+            if (increase_exponent(exponent, 1)) {
+                // overflow in exponent -> change to infinity
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // number of bits significand needs to shift to get implied-one
@@ -445,7 +467,7 @@ private:
 private:
 
     enum class fp_class { nan, infinity, zero, normal, denormal };
-    struct fp_components { 
+    struct fp_components {
         fp_class class_;
         uint8_t sign;
         exponent_t exponent;
@@ -495,11 +517,11 @@ private:
 
 public:
     static constexpr floatbase_t indeterminate_nan() {
-        return floatbase_t{ 1, exponent_mask, uint_t(1) << (significand_bitsize-1) };
+        return floatbase_t{ 1, exponent_mask, uint_t(1) << (significand_bitsize - 1) };
     }
 
     static constexpr floatbase_t infinity(uint8_t sign = 0) {
-        return floatbase_t{ sign, exponent_mask, 0};
+        return floatbase_t{ sign, exponent_mask, 0 };
     }
 
     static constexpr floatbase_t zero(uint8_t sign = 0) {
@@ -596,7 +618,7 @@ public:
                 significand--;
 
                 // invert roundoff_bits (small value becomes large during subtraction)
-                roundoff_bits = 0-roundoff_bits; // rely on unsigned wrap-around
+                roundoff_bits = 0 - roundoff_bits; // rely on unsigned wrap-around
 
                 // if we lost the top-bit shift everything over
                 if ((significand & (significand_mask + 1)) == 0) {
@@ -606,58 +628,68 @@ public:
                     exponent--; // TODO: can this underflow???
                 }
 
-                round_signficant(significand, roundoff_bits);
+                if (!round_significand(significand, exponent, roundoff_bits)) {
+                    return infinity(sign);
+                }
+            }
+
+
+            int distance = significand_adjustment(significand);
+            assert(distance >= 0);
+
+            if (distance > 0)
+            {
+                // underflow--decrease exponent and fill significand with 0s
+                if (int underflow_amount = decrease_exponent(exponent, distance))
+                {
+                    // underflow in exponent -> change to denormal
+                    int shift_amount = distance - underflow_amount;
+
+                    if (shift_amount > 0) {
+                        assert((distance - underflow_amount) < significand_bitsize);
+                        significand <<= shift_amount;
+                    }
+                    else if (shift_amount < 0) {
+                        if (-shift_amount < bitsize) {
+                            significand >>= -shift_amount;
+                        }
+                        else {
+                            return zero();
+                        }
+                    }
+                    return denormal(sign, significand);
+                }
+                else
+                {
+                    significand <<= distance;
+                }
             }
         }
         else
         {
             significand = l.significand + r.significand;
-            round_signficant(significand, roundoff_bits);
             sign = l.sign;
-        }
 
-        int distance = significand_adjustment(significand);
+            // check for overflow
+            constexpr uint_t topbit = (uint_t(1) << significand_bitsize);
+            constexpr uint_t overflowbit = topbit << 1;
 
-        if (distance > 0)
-        {
-            // underflow--decrease exponent and fill significand with 0s
-            if (int underflow_amount = decrease_exponent(exponent, distance))
-            {
-                // underflow in exponent -> change to denormal
-                int shift_amount = distance - underflow_amount;
-
-                if (shift_amount > 0) {
-                    assert((distance - underflow_amount) < significand_bitsize);
-                    significand <<= shift_amount;
+            if ((significand & overflowbit) != 0) {
+                roundoff_bits >>= 1;
+                roundoff_bits |= (significand & 1) << (bitsize - 1);
+                significand >>= 1;
+                if (increase_exponent(exponent, 1)) {
+                    // overflow in exponent -> change to infinity
+                    return infinity(sign);
                 }
-                else if (shift_amount < 0) {
-                    if (-shift_amount < bitsize) {
-                        significand >>= -shift_amount;
-                    }
-                    else {
-                        return zero();
-                    }
-                }
-                return denormal(sign, significand);
             }
-            else
-            {
-                significand <<= distance;
-            }
-        }
-        else if (distance < 0)
-        {
-            // overflow--increase exponent and round significand
-            auto roundoff_bitsize = -distance;
-            if (increase_exponent(exponent, roundoff_bitsize))
-            {
-                // overflow in exponent -> change to infinity
+
+            if (!round_significand(significand, exponent, roundoff_bits)) {
                 return infinity(sign);
             }
-            else
-            {
-                auto roundoff_bits2 = decrease_significand(significand, roundoff_bitsize);
-                round_signficant(significand, roundoff_bits2);
+
+            if ((significand & topbit) == 0) {
+                return denormal(sign, significand);
             }
         }
 
@@ -726,7 +758,7 @@ public:
         else if (exponent < emin) {
             return zero(sign);
         }
- 
+
         constexpr uint_t midpoint = uint_t(1) << (significand_bitsize - 1);
         uint_t significand = 0;
         uint_t roundoff_bits = 0;
@@ -807,10 +839,18 @@ public:
             }
         }
 
+        // TODO: use round_significand here, but first must ensure roundoff_bits
+        // is aligned to MSB.
+#if 0
+        if (!round_significand(significand, exponent, roundoff_bits)) {
+            return infinity(sign);
+        }
+#else
         if (roundoff_bits > midpoint)
             significand++;
         else if (roundoff_bits == midpoint)
             significand += (significand & 1); // round-to-even
+#endif
 
         significand &= significand_mask;
         exponent += bias;
@@ -837,7 +877,7 @@ public:
         }
 
         // convert remainder into binary 
-        quotient |= remainder_division(dividend, divisor, bit-1);
+        quotient |= remainder_division(dividend, divisor, bit - 1);
 
         return static_cast<uint_t>(quotient);
     }
@@ -950,6 +990,14 @@ public:
             }
         }
 
+        // TODO: use round_significand here, but first must ensure roundoff_bits
+        // is aligned to MSB.
+#if 0
+        if (!round_significand(significand, exponent, roundoff_bits)) {
+            return infinity(sign);
+        }
+#else
+
         constexpr uint_t midpoint = uint_t(1) << significand_bitsize;
         if (roundoff_bits > midpoint) {
             significand++; // round up
@@ -957,6 +1005,7 @@ public:
         else if (roundoff_bits == midpoint) {
             significand += (significand & 1); // round-to-even
         }
+#endif
 
         significand &= significand_mask;
         exponent += bias;
@@ -996,16 +1045,16 @@ public:
     //
     // public utitliy functions
     //
- public:
+public:
 
-     // publicly expose private constructors as factory functions. This is done
-     // to keep floatbase_t interface similar to built-in float/double while
-     // still allowing easy creation from integer values.
-     static floatbase_t from_bitstring(uint_t t) { return floatbase_t{ t }; }
-     static floatbase_t from_triplet(bool sign, exponent_t exponent, uint_t significand) {
-         return floatbase_t{ static_cast<uint_t>(sign), static_cast<uexponent_t>(exponent), significand };
-     }
- };
+    // publicly expose private constructors as factory functions. This is done
+    // to keep floatbase_t interface similar to built-in float/double while
+    // still allowing easy creation from integer values.
+    static floatbase_t from_bitstring(uint_t t) { return floatbase_t{ t }; }
+    static floatbase_t from_triplet(bool sign, exponent_t exponent, uint_t significand) {
+        return floatbase_t{ static_cast<uint_t>(sign), static_cast<uexponent_t>(exponent), significand };
+    }
+};
 
 
 using float16_t = floatbase_t<fp_format::binary16>;
