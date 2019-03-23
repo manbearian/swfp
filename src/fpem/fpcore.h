@@ -197,38 +197,99 @@ public:
         return wide_significand << (T::significand_bitsize - significand_bitsize);
     }
 
-    template<typename T> typename T::uint_t narrow_significand(uint_t significand, exponent_t& exponent)
+    template<typename widefp_t> widefp_t to_widefp()
     {
-        constexpr auto bitdiff = significand_bitsize - T::significand_bitsize;
-        constexpr auto mask = (uint_t(1) << bitdiff) - 1;
-        constexpr auto midpoint = uint_t(1) << (bitdiff - 1);
-        constexpr auto overflow = uint_t(1) << (T::significand_bitsize + 1);
+        constexpr int significand_bitdiff = widefp_t::significand_bitsize - significand_bitsize;
 
-        uint_t roundoff_bits = significand & mask;
-        significand >>= bitdiff;
+        uint8_t sign = raw_value >> (bitsize - 1);
+        exponent_t exponent = (raw_value >> significand_bitsize) & exponent_mask;
+        uint_t narrow_significand = raw_value & significand_mask;
 
-        // TODO: use round_significand here, but first must ensure roundoff_bits
-        // is aligned to MSB.
-#if 0
-        if (!round_significand(significand, exponent, roundoff_bits)) {
-            return infinity(sign);
-        }
-#else
-        if (roundoff_bits > midpoint) {
-            significand++;
-        }
-        else if (roundoff_bits == midpoint) {
-            significand += (significand & 1); // round-to-even
+        // special values
+        if (exponent == exponent_mask) {
+            if (narrow_significand == 0) {
+                return widefp_t::infinity(sign);
+            }
+            // preserve NaN-payload
+            return widefp_t{ sign, widefp_t::exponent_mask, static_cast<widefp_t::uint_t>(narrow_significand) << significand_bitdiff };
         }
 
-        if (significand == overflow) {
-            significand >>= 1;
-            exponent++;
-            assert(exponent != T::exponent_mask); // TODO: overflow?
-        }
-#endif
+        if (exponent == 0) {
+            if (narrow_significand == 0) {
+                return widefp_t::zero(sign);
+            }
 
-        return static_cast<T::uint_t>(significand);
+            // denormals of smaller type will become normals of the larger type
+            exponent = emin;
+            int distance = significand_adjustment(narrow_significand);
+            assert(distance > 0);
+            narrow_significand <<= distance;
+            narrow_significand &= significand_mask;
+            exponent -= distance; // cannot underflow
+        }
+        else {
+            exponent -= bias;
+        }
+
+        widefp_t::uint_t wide_significand = narrow_significand;
+        wide_significand <<= significand_bitdiff;
+
+        exponent += widefp_t::bias;
+
+        return widefp_t{ sign, exponent, wide_significand };
+    }
+
+    template<typename narrowfp_t> narrowfp_t to_narrowfp()
+    {
+        constexpr int significand_bitdiff = significand_bitsize - narrowfp_t::significand_bitsize;
+        constexpr uint_t mask = (uint_t(1) << significand_bitdiff) - 1;
+
+        uint8_t sign = raw_value >> (bitsize - 1);
+        exponent_t exponent = (raw_value >> significand_bitsize) & exponent_mask;
+        uint_t wide_significand = raw_value & significand_mask;
+
+        if (exponent == 0) {
+            // denormals round to 0
+            return narrowfp_t::zero(sign);
+        }
+        else if (exponent == exponent_mask) {
+            // special values
+            if (wide_significand == 0) {
+                return narrowfp_t::infinity(sign);
+            }
+            // preserve NaN-payload
+            return narrowfp_t{ sign, narrowfp_t::exponent_mask, static_cast<narrowfp_t::uint_t>(wide_significand >> significand_bitdiff) };
+        }
+
+        exponent -= bias;
+        wide_significand |= (1 << significand_bitsize);
+
+        narrowfp_t::uint_t narrow_significand = static_cast<narrowfp_t::uint_t>(wide_significand >> significand_bitdiff);
+        narrowfp_t::uint_t roundoff_bits = static_cast<narrowfp_t::uint_t>((wide_significand & mask) << (narrowfp_t::bitsize - significand_bitdiff));
+
+        if (!narrowfp_t::round_significand(narrow_significand, exponent, roundoff_bits)) {
+            return narrowfp_t::infinity(sign);
+        }
+
+        // if the exponent is outside the range of the narrower FP
+        // type see if it could be a denomral of tha narrrow FP type.
+        if (exponent < narrowfp_t::emin) {
+            while (exponent < narrowfp_t::emin) {
+                exponent++;
+                narrow_significand >>= 1;
+
+                if (narrow_significand == 0) {
+                    return narrowfp_t::zero(sign);
+                }
+            }
+
+            return narrowfp_t::denormal(sign, narrow_significand);
+        }
+
+        narrow_significand &= narrowfp_t::significand_mask;
+        exponent += narrowfp_t::bias;
+
+        return narrowfp_t{ sign, exponent, narrow_significand };
     }
 
     explicit operator floatbase_t<fp_format::binary16>()
@@ -240,39 +301,7 @@ public:
             || format == fp_format::binary64
             || format == fp_format::binary128)
         {
-            uint8_t sign = raw_value >> (bitsize - 1);
-            exponent_t exponent = (raw_value >> significand_bitsize) & exponent_mask;
-            uint_t significand = raw_value & significand_mask;
-
-            if (exponent == 0) {
-                // denormals round to 0
-                significand = 0;
-            }
-            else if (exponent == exponent_mask) {
-                exponent = float16_t::exponent_mask;
-            }
-            else {
-                exponent -= bias;
-                significand |= (1 << significand_bitsize);
-
-                if (exponent < float16_t::emin) {
-                    while ((exponent < float16_t::emin) && significand) {
-                        // see if we can make this into a denormal
-                        exponent++;
-                        significand >>= 1;
-                    }
-                    exponent = 0;
-                }
-                else {
-                    exponent += float16_t::bias;
-                }
-            }
-
-            auto significand16 = narrow_significand<float16_t>(significand, exponent);
-
-            significand16 &= float16_t::significand_mask;
-
-            return float16_t{ sign, exponent, significand16 };
+            return to_narrowfp<float16_t>();
         }
         else
         {
@@ -288,30 +317,12 @@ public:
         // convert smaller FP to bigger FP
         if constexpr (format == fp_format::binary16)
         {
-            uint8_t sign = raw_value >> (bitsize - 1);
-            exponent_t exponent = (raw_value >> significand_bitsize) & exponent_mask;
-            uint_t significand = raw_value & significand_mask;
-
-            if (exponent == 0) {
-                if (significand != 0) {
-                    exponent = emin;
-                    int distance = significand_adjustment(significand);
-                    assert(distance > 0);
-                    significand <<= distance;
-                    exponent -= distance; // cannot underflow
-                    exponent += float32_t::bias;
-                }
-            }
-            else if (exponent == exponent_mask) {
-                exponent = float32_t::exponent_mask;
-            }
-            else {
-                exponent -= bias;
-                exponent += float32_t::bias;
-            }
-
-            auto significand32 = widen_significand<float32_t>(significand);
-            return float32_t{ sign, exponent, (significand32 & float32_t::significand_mask) };
+            return to_widefp<float32_t>();
+        }
+        else if constexpr ((format == fp_format::binary64)
+            || (format == fp_format::binary128))
+        {
+            return to_narrowfp<float32_t>();
         }
         else
         {
@@ -322,9 +333,32 @@ public:
 
     explicit operator floatbase_t<fp_format::binary64>()
     {
-        static_assert(false, "nyi: convert to hw float64");
-        return float64_t::indeterminate_nan();
+        static_assert(format != fp_format::binary64, "convert from T to T is impossible");
+
+        if constexpr (format == fp_format::binary128)
+        {
+            return to_narrowfp<float64_t>();
+        }
+        else if constexpr (format == fp_format::binary16
+            || format == fp_format::binary32)
+        {
+            return to_widefp<float64_t>();
+        }
+        else
+        {
+            static_assert(false, "nyi: convert to hw float64");
+            return float64_t::indeterminate_nan();
+        }
     }
+
+#if 0
+    explicit operator floatbase_t<fp_format::binary128>()
+    {
+        static_assert(format != fp_format::binary128, "convert from T to T is impossible");
+
+        return to_widefp<float128_t>();
+    }
+#endif
 
 
     //
@@ -670,10 +704,10 @@ public:
             significand = l.significand + r.significand;
             sign = l.sign;
 
-            // check for overflow
             constexpr uint_t topbit = (uint_t(1) << significand_bitsize);
             constexpr uint_t overflowbit = topbit << 1;
 
+            // check for overflow
             if ((significand & overflowbit) != 0) {
                 roundoff_bits >>= 1;
                 roundoff_bits |= (significand & 1) << (bitsize - 1);
@@ -693,8 +727,8 @@ public:
             }
         }
 
-        // mask off implied leading 1.
         assert((~significand_mask & significand) == (significand_mask + 1)); // only implied bit set outside of significand
+
         significand &= significand_mask;
         exponent += bias;
 
