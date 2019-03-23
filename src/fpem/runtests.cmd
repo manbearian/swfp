@@ -1,8 +1,20 @@
 
-cl -nologo -EHsc -std:c++17 -Zi -W4 -diagnostics:caret -O2 -DNDEBUG conv16to32.cpp && conv16to32.exe
-if not errorlevel 0 goto :fail
-if errorlevel 1 goto :fail
+@for %%x in (
 
-cl -nologo -EHsc -std:c++17 -Zi -W4 -diagnostics:caret -O2 -DNDEBUG basic_arith.cpp && basic_arith.exe
-if not errorlevel 0 goto :fail
-if errorlevel 1 goto :fail
+ conv16to32.cpp
+ basic_arith.cpp
+ add16_all.cpp
+
+) do @(
+ cl -nologo -EHsc -std:c++17 -Zi -W4 -diagnostics:caret -O2 -DNDEBUG %%~nx.cpp && %%~nx.exe
+ if not errorlevel 0 goto :fail
+ if errorlevel 1 goto :fail
+)
+echo PASS ALL TESTS
+goto :eof
+
+
+:fail
+echo !!!FAILURE!!!
+goto :eof
+
