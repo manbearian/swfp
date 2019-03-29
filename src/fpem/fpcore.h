@@ -892,36 +892,12 @@ public:
         return floatbase_t{ sign, exponent, significand };
     }
 
-    // handle a division where the whole number portion can be > 1
+    // compute binary long division
     uint_t long_division(int_t& dividend, int_t divisor)
     {
         int_t quotient = 0;
 
-        int bit = significand_bitsize;
-
-        while (dividend && (dividend < divisor) && (bit-- >= 0)) {
-            dividend <<= 1;
-        }
-
-        // compute the whole number portion
-        if (dividend) {
-            auto result = std::div(dividend, divisor);
-            quotient = (result.quot << bit);
-            dividend = result.rem << 1;
-        }
-
-        // convert remainder into binary 
-        quotient |= remainder_division(dividend, divisor, bit - 1);
-
-        return static_cast<uint_t>(quotient);
-    }
-
-    // handle a division where the whole number portion is < 1
-    uint_t remainder_division(int_t& dividend, int_t divisor, int bitcount = significand_bitsize)
-    {
-        int_t quotient = 0;
-
-        for (int bit = bitcount; dividend && (bit >= 0); bit--)
+        for (int bit = significand_bitsize; dividend && (bit >= 0); bit--)
         {
             if (dividend >= divisor) {
                 quotient |= (int_t(1) << bit);
@@ -968,6 +944,19 @@ public:
             return zero(sign);
         }
 
+        // convert denormal inputs into normal so that values are close
+        // to each other during division to avoid overflowing the quotient
+        if (l.class_ == fp_class::denormal) {
+            int adjustment = significand_adjustment(l.significand);
+            l.significand <<= adjustment;
+            l.exponent -= adjustment;
+        }
+        if (r.class_ == fp_class::denormal) {
+            int adjustment = significand_adjustment(r.significand);
+            r.significand <<= adjustment;
+            r.exponent -= adjustment;
+        }
+
         exponent_t exponent = l.exponent - r.exponent;
 
         int_t dividend = static_cast<int_t>(l.significand);
@@ -977,9 +966,9 @@ public:
             return infinity(sign);
         }
 
-        // bring denormal inputs into range if possible
+        // bring denormal output into range if possible
         while (exponent < emin) {
-            exponent++; // cannot overflow
+            ++exponent; // overflow prevented by loop exit condition
             dividend >>= 1;
             if (dividend == 0) {
                 return zero(sign);
@@ -989,23 +978,36 @@ public:
         // ensure we compute exactly the right amount of significand digits
         while ((dividend < divisor) && (exponent != emin)) {
             dividend <<= 1;
-            --exponent;
-            continue;
+            --exponent; // underflow prevented by loop exit condition
         }
 
         uint_t significand = long_division(dividend, divisor);
+
+        uint_t roundoff_bits = long_division(dividend, divisor);
+        roundoff_bits <<= (bitsize - (significand_bitsize + 1));
+
+        // if this is a repeating fractional part, force round-up at midpoint
+        if (dividend && (roundoff_bits == (uint_t(1) << (bitsize - 1)))) {
+            roundoff_bits += 1;
+        }
 
         int distance = significand_adjustment(significand);
 
         if (distance > 0)
         {
+            if (!round_significand(significand, exponent, roundoff_bits)) {
+                return infinity(sign);
+            }
+
             // TODO: do we need rounding bits here?
             assert(exponent == emin);
             return denormal(sign, significand);
         }
 
-        uint_t roundoff_bits = remainder_division(dividend, divisor);
-
+#if 1
+        // the if-0 code shouldn't be needed the 1.xx/1.yy is either <=1.9999
+        assert(distance == 0);
+#else
         if (distance < 0)
         {
             auto shift_amount = -distance;
@@ -1023,23 +1025,11 @@ public:
                 roundoff_bits >>= -distance;
             }
         }
+#endif
 
-        // TODO: use round_significand here, but first must ensure roundoff_bits
-        // is aligned to MSB.
-#if 0
         if (!round_significand(significand, exponent, roundoff_bits)) {
             return infinity(sign);
         }
-#else
-
-        constexpr uint_t midpoint = uint_t(1) << significand_bitsize;
-        if (roundoff_bits > midpoint) {
-            significand++; // round up
-        }
-        else if (roundoff_bits == midpoint) {
-            significand += (significand & 1); // round-to-even
-        }
-#endif
 
         significand &= significand_mask;
         exponent += bias;
