@@ -29,8 +29,6 @@ void validate_add(float16_t a, float16_t b)
     float z = x + y;
     float16_t z16 = (float16_t)z;
 
-    float32_t z32 = float32_t(x) + float32_t(y);
-
     if (std::isnan(x) || std::isnan(y))
     {
         // todo: understand NaN payloads and ensure they are enforced
