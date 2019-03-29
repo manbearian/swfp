@@ -892,8 +892,21 @@ public:
         return floatbase_t{ sign, exponent, significand };
     }
 
+    void long_division(int_t dividend, int_t divisor, uint_t& quotient, uint_t& remainder)
+    {
+        quotient = long_division_loop(dividend, divisor);
+        remainder = long_division_loop(dividend, divisor);
+
+        remainder <<= (bitsize - (significand_bitsize + 1));
+
+        // if this is a repeating fractional part, force round-up at midpoint
+        if (dividend && (remainder == (uint_t(1) << (bitsize - 1)))) {
+            remainder += 1;
+        }
+    }
+
     // compute binary long division
-    uint_t long_division(int_t& dividend, int_t divisor)
+    uint_t long_division_loop(int_t& dividend, int_t divisor)
     {
         int_t quotient = 0;
 
@@ -981,54 +994,22 @@ public:
             --exponent; // underflow prevented by loop exit condition
         }
 
-        uint_t significand = long_division(dividend, divisor);
+        uint_t significand, roundoff_bits;
+        long_division(dividend, divisor, significand, roundoff_bits);
 
-        uint_t roundoff_bits = long_division(dividend, divisor);
-        roundoff_bits <<= (bitsize - (significand_bitsize + 1));
-
-        // if this is a repeating fractional part, force round-up at midpoint
-        if (dividend && (roundoff_bits == (uint_t(1) << (bitsize - 1)))) {
-            roundoff_bits += 1;
+        if (!round_significand(significand, exponent, roundoff_bits)) {
+            return infinity(sign);
         }
 
         int distance = significand_adjustment(significand);
 
+        // long_division() produces only a single digit in the whole number position
+        assert(distance >= 0);
+
         if (distance > 0)
         {
-            if (!round_significand(significand, exponent, roundoff_bits)) {
-                return infinity(sign);
-            }
-
-            // TODO: do we need rounding bits here?
             assert(exponent == emin);
             return denormal(sign, significand);
-        }
-
-#if 1
-        // the if-0 code shouldn't be needed the 1.xx/1.yy is either <=1.9999
-        assert(distance == 0);
-#else
-        if (distance < 0)
-        {
-            auto shift_amount = -distance;
-
-            uint_t shift_out = significand & ((uint_t(1) << shift_amount) - 1);
-            significand >>= shift_amount;
-            roundoff_bits >>= shift_amount;
-            roundoff_bits |= shift_out << (significand_bitsize - shift_amount + 1);
-            if (increase_exponent(exponent, shift_amount)) {
-                return infinity(sign);
-            }
-
-            distance = significand_adjustment(roundoff_bits);
-            if (distance < 0) {
-                roundoff_bits >>= -distance;
-            }
-        }
-#endif
-
-        if (!round_significand(significand, exponent, roundoff_bits)) {
-            return infinity(sign);
         }
 
         significand &= significand_mask;
