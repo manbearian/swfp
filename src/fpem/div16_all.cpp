@@ -50,10 +50,10 @@ void validate_div(float16_t a, float16_t b)
         cout << "b-to-32: " << y << " " << float32_t(y).to_hex_string() << " " << float32_t(y).to_triplet_string() << endl;
         cout << "hw-at-32: " << z << " " << float32_t(z).to_hex_string() << " " << float32_t(z).to_triplet_string() << endl;
 
-        float32_t z32 = (float32_t)a * (float32_t)b;
+        float32_t z32 = (float32_t)a / (float32_t)b;
         cout << "sw-at-32:  " << (float)z32 << " " << z32.to_hex_string() << " " << z32.to_triplet_string() << endl;
 
-        throw std::exception("bad mul");
+        throw std::exception("bad div");
     }
 }
 
