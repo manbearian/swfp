@@ -1017,32 +1017,35 @@ public:
         int_t dividend = static_cast<int_t>(l.significand);
         int_t divisor = static_cast<int_t>(r.significand);
 
-        // bring subnormal output into range if possible
-        while (exponent < emin) {
-            ++exponent; // overflow prevented by loop exit condition
-            dividend >>= 1;
-            if (dividend == 0) {
-                return zero(sign);
-            }
-        }
-
         // ensure we compute exactly the right amount of significand digits
-        while ((dividend < divisor) && (exponent != emin)) {
+        assert(dividend && (divisor <= (uint_t(1) << (significand_bitsize + 1)))); // ensure loop terminates
+        while (dividend < divisor) {
             dividend <<= 1;
-            --exponent; // underflow prevented by loop exit condition
+            --exponent; // underflow okay, handled later
         }
 
         uint_t significand, roundoff_bits;
         long_division(dividend, divisor, significand, roundoff_bits);
 
-        int distance = significand_adjustment(significand);
-
-        // long_division() produces only a single digit in the whole number position
-        assert(distance >= 0);
-
-        if (distance > 0)
+        if (significand < (significand_mask + 1))
         {
             assert(exponent == emin);
+            if (round_subnormal_significand(significand, roundoff_bits)) {
+                return subnormal(sign, significand);
+            }
+        }
+        else if (exponent < emin) {
+            while (exponent < emin) {
+                ++exponent;
+                roundoff_bits >>= 1;
+                roundoff_bits |= (significand & 1) << (bitsize - 1);
+                significand >>= 1;
+
+                if (significand == 0 && roundoff_bits == 0) {
+                    return zero(sign);
+                }
+            }
+
             if (round_subnormal_significand(significand, roundoff_bits)) {
                 return subnormal(sign, significand);
             }
