@@ -1017,10 +1017,6 @@ public:
         int_t dividend = static_cast<int_t>(l.significand);
         int_t divisor = static_cast<int_t>(r.significand);
 
-        if (exponent > emax) {
-            return infinity(sign);
-        }
-
         // bring subnormal output into range if possible
         while (exponent < emin) {
             ++exponent; // overflow prevented by loop exit condition
@@ -1039,10 +1035,6 @@ public:
         uint_t significand, roundoff_bits;
         long_division(dividend, divisor, significand, roundoff_bits);
 
-        if (!round_significand(significand, exponent, roundoff_bits)) {
-            return infinity(sign);
-        }
-
         int distance = significand_adjustment(significand);
 
         // long_division() produces only a single digit in the whole number position
@@ -1051,7 +1043,15 @@ public:
         if (distance > 0)
         {
             assert(exponent == emin);
-            return subnormal(sign, significand);
+            if (round_subnormal_significand(significand, roundoff_bits)) {
+                return subnormal(sign, significand);
+            }
+        }
+        else if (exponent > emax) {
+            return infinity(sign);
+        }
+        else if (!round_significand(significand, exponent, roundoff_bits)) {
+            return infinity(sign);
         }
 
         return normal(sign, exponent, significand);
