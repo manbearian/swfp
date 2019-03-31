@@ -18,18 +18,18 @@ using std::cout;
 using std::endl;
 
 //
-// Validate all 16-bit add operations
+// Validate all 16-bit div operations
 //  compute in HW at 32-bit and compare to 16-bit output
-//  tests both ADD and NARROW operations
+//  tests both DIV and NARROW operations
 //
 
-void validate_add(float16_t a, float16_t b)
+void validate_div(float16_t a, float16_t b)
 {
     float x = (float)a;
     float y = (float)b;
 
-    float16_t c = a + b;
-    float z = x + y;
+    float16_t c = a / b;
+    float z = x / y;
     float16_t z16 = (float16_t)z;
 
     if (std::isnan(x) || std::isnan(y))
@@ -41,38 +41,20 @@ void validate_add(float16_t a, float16_t b)
     else if (memcmp(&c, &z16, sizeof(c)) != 0)
     {
         cout << "failed!" << endl;
-        cout << "a: " << (float)a << " " << a.to_hex_string() << " " << a.to_triplet_string() << endl;
-        cout << "b: " << (float)b << " " << b.to_hex_string() << " " << b.to_triplet_string() << endl;
-        cout << "c: " << (float)c << " " << c.to_hex_string() << " " << c.to_triplet_string() << endl;
-        cout << "z16: " << (float)z16 << " " << z16.to_hex_string() << " " << z16.to_triplet_string() << endl;
+        cout << "a-as-16: " << (float)a << " " << a.to_hex_string() << " " << a.to_triplet_string() << endl;
+        cout << "b-as-16: " << (float)b << " " << b.to_hex_string() << " " << b.to_triplet_string() << endl;
+        cout << "sw-at-16: " << (float)c << " " << c.to_hex_string() << " " << c.to_triplet_string() << endl;
+        cout << "hw-to-16: " << (float)z16 << " " << z16.to_hex_string() << " " << z16.to_triplet_string() << endl;
         cout << "\n";
-        cout << "x: " << x << " " << float32_t(x).to_hex_string() << " " << float32_t(x).to_triplet_string() << endl;
-        cout << "y: " << y << " " << float32_t(y).to_hex_string() << " " << float32_t(y).to_triplet_string() << endl;
-        cout << "z: " << z << " " << float32_t(z).to_hex_string() << " " << float32_t(z).to_triplet_string() << endl;
+        cout << "a-to-32: " << x << " " << float32_t(x).to_hex_string() << " " << float32_t(x).to_triplet_string() << endl;
+        cout << "b-to-32: " << y << " " << float32_t(y).to_hex_string() << " " << float32_t(y).to_triplet_string() << endl;
+        cout << "hw-at-32: " << z << " " << float32_t(z).to_hex_string() << " " << float32_t(z).to_triplet_string() << endl;
 
+        float32_t z32 = (float32_t)a * (float32_t)b;
+        cout << "sw-at-32:  " << (float)z32 << " " << z32.to_hex_string() << " " << z32.to_triplet_string() << endl;
 
-        throw std::exception("bad add");
+        throw std::exception("bad mul");
     }
-}
-
-void validate_add()
-{
-    for (int i = 0; i < std::numeric_limits<uint16_t>::max(); ++i) {
-        if (i % 10000 == 0) {
-            cout << "@";
-        } else if (i % 1000 == 0) {
-            cout << "$";
-        }  else if (i % 100 == 0) {
-            cout << ".";
-        }
-        for (int j = 0; j < std::numeric_limits<uint16_t>::max(); ++j) {
-            auto a = float16_t::from_bitstring(uint16_t(i));
-            auto b = float16_t::from_bitstring(uint16_t(j));
-            validate_add(a, b);
-        }
-    }
-    cout << "\n";
-
 }
 
 std::atomic<int> count = 0;
@@ -91,7 +73,7 @@ int main()
         std::for_each(std::execution::par_unseq, std::begin(values), std::end(values), [](float16_t a) {
             for (int j = 0; j < std::numeric_limits<uint16_t>::max(); ++j) {
                 auto b = float16_t::from_bitstring(uint16_t(j));
-                validate_add(a, b);
+                validate_div(a, b);
             }
 
             // output progress
@@ -108,7 +90,6 @@ int main()
         });
 
         cout << "\n";
-
     }
     catch (std::exception e)
     {
