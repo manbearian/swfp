@@ -219,7 +219,7 @@ public:
                 return widefp_t::zero(sign);
             }
 
-            // denormals of smaller type will become normals of the larger type
+            // subnormals of smaller type will become normals of the larger type
             exponent = emin;
             int distance = significand_adjustment(narrow_significand);
             assert(distance > 0);
@@ -249,7 +249,7 @@ public:
         uint_t wide_significand = raw_value & significand_mask;
 
         if (exponent == 0) {
-            // denormals round to 0
+            // subnormals round to 0
             return narrowfp_t::zero(sign);
         }
         else if (exponent == exponent_mask) {
@@ -282,7 +282,7 @@ public:
             }
 
             if (narrowfp_t::round_subnormal_significand(narrow_significand, roundoff_bits)) {
-                return narrowfp_t::denormal(sign, narrow_significand);
+                return narrowfp_t::subnormal(sign, narrow_significand);
             }
         }
         else if (exponent > narrowfp_t::emax) {
@@ -528,7 +528,7 @@ private:
 
 private:
 
-    enum class fp_class { nan, infinity, zero, normal, denormal };
+    enum class fp_class { nan, infinity, zero, normal, subnormal };
     struct fp_components {
         fp_class class_;
         uint8_t sign;
@@ -553,7 +553,7 @@ private:
             else
             {
                 components.exponent = emin;
-                components.class_ = fp_class::denormal;
+                components.class_ = fp_class::subnormal;
             }
         }
         else if (components.exponent == exponent_mask)
@@ -590,7 +590,7 @@ public:
         return floatbase_t{ sign, 0, 0 };
     }
 
-    static constexpr floatbase_t denormal(uint8_t sign, uint_t significand) {
+    static constexpr floatbase_t subnormal(uint8_t sign, uint_t significand) {
         return floatbase_t{ sign, 0, significand };
     }
 
@@ -710,7 +710,7 @@ public:
                 // underflow--decrease exponent and fill significand with 0s
                 if (int underflow_amount = decrease_exponent(exponent, distance))
                 {
-                    // underflow in exponent -> change to denormal
+                    // underflow in exponent -> change to subnormal
                     int shift_amount = distance - underflow_amount;
 
                     if (shift_amount > 0) {
@@ -725,7 +725,7 @@ public:
                             return zero();
                         }
                     }
-                    return denormal(sign, significand);
+                    return subnormal(sign, significand);
                 }
                 else
                 {
@@ -757,7 +757,7 @@ public:
             }
 
             if ((significand & topbit) == 0) {
-                return denormal(sign, significand);
+                return subnormal(sign, significand);
             }
         }
 
@@ -863,11 +863,11 @@ public:
 
         if (distance > 0)
         {
-            // underflow in significand (there was a denormal in the input)
+            // underflow in significand (there was a subnormal in the input)
 
             if (int underflow_amount = decrease_exponent(exponent, distance))
             {
-                // underflow in exponent -> result is a denormal
+                // underflow in exponent -> result is a subnormal
                 distance -= underflow_amount;
 
                 if (distance < 0) {
@@ -885,7 +885,7 @@ public:
                     return normal(sign, emin, significand);
                 }
 
-                return denormal(sign, significand);
+                return subnormal(sign, significand);
             }
             else
             {
@@ -924,7 +924,7 @@ public:
             }
 
             if (round_subnormal_significand(significand, roundoff_bits)) {
-                return denormal(sign, significand);
+                return subnormal(sign, significand);
             }
         }
         else if (!round_significand(significand, exponent, roundoff_bits)) {
@@ -999,14 +999,14 @@ public:
             return zero(sign);
         }
 
-        // convert denormal inputs into normal so that values are close
+        // convert subnormal inputs into normal so that values are close
         // to each other during division to avoid overflowing the quotient
-        if (l.class_ == fp_class::denormal) {
+        if (l.class_ == fp_class::subnormal) {
             int adjustment = significand_adjustment(l.significand);
             l.significand <<= adjustment;
             l.exponent -= adjustment;
         }
-        if (r.class_ == fp_class::denormal) {
+        if (r.class_ == fp_class::subnormal) {
             int adjustment = significand_adjustment(r.significand);
             r.significand <<= adjustment;
             r.exponent -= adjustment;
@@ -1021,7 +1021,7 @@ public:
             return infinity(sign);
         }
 
-        // bring denormal output into range if possible
+        // bring subnormal output into range if possible
         while (exponent < emin) {
             ++exponent; // overflow prevented by loop exit condition
             dividend >>= 1;
@@ -1051,7 +1051,7 @@ public:
         if (distance > 0)
         {
             assert(exponent == emin);
-            return denormal(sign, significand);
+            return subnormal(sign, significand);
         }
 
         return normal(sign, exponent, significand);
