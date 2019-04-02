@@ -1,11 +1,17 @@
 #include <stdint.h>
+#include <stdlib.h>
 #include <memory>
+#include <limits>
 #include <type_traits>
 #include <string>
 #include <sstream>
 #include <assert.h>
 #include <algorithm>
 #include <intrin.h>
+
+// Emulate IA32/IA32-64 behavior when outside the bounds of IEEE754
+#define EMULATE_INTEL 1
+
 
 enum class fp_format
 {
@@ -157,6 +163,84 @@ private:
         floatbase_t(sign, static_cast<uint_t>(static_cast<uexponent_t>(exponent)), significand)
     { }
 
+    //
+    // convert to integral type
+    //
+
+public:
+
+    template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
+    explicit operator integral_t()
+    {
+        fp_components components = decompose();
+        
+        switch (components.class_)
+        {
+        case fp_class::infinity:
+            if constexpr (EMULATE_INTEL) {
+                return std::numeric_limits<integral_t>::min();
+            }
+            else {
+                return components.sign ? std::numeric_limits<integral_t>::min() : std::numeric_limits<integral_t>::max();
+            }
+        case fp_class::nan:
+            if constexpr (EMULATE_INTEL) {
+                return std::numeric_limits<integral_t>::min();
+            }
+            else {
+                return 0;
+            }
+        }
+
+        if constexpr (!std::is_signed_v<integral_t>) {
+            if (components.sign) {
+                if constexpr (EMULATE_INTEL) {
+                    return std::numeric_limits<integral_t>::max();
+                }
+                else {
+                    return 0;
+                }
+            }
+        }
+
+        integral_t value = static_cast<integral_t>(components.significand);
+
+        int bitshift = significand_bitsize - components.exponent;
+
+        if (bitshift > 0)
+        {
+            if (bitshift > (sizeof(integral_t) * 8)) {
+                if constexpr (EMULATE_INTEL) {
+                    return std::numeric_limits<integral_t>::min();
+                }
+                else {
+                    return 0;
+                }
+            }
+
+            value >>= bitshift;
+        }
+        else if (bitshift < 0)
+        {
+            if (-bitshift > (sizeof(integral_t) * 8)) {
+                if constexpr (EMULATE_INTEL) {
+                    return std::numeric_limits<integral_t>::min();
+                }
+                else {
+                    return components.sign ? std::numeric_limits<integral_t>::min() : std::numeric_limits<integral_t>::max();
+                }
+            }
+
+            value <<= -bitshift;
+        }
+
+        if constexpr (std::is_signed_v<integral_t>) {
+            return components.sign ? -value : value;
+        }
+        else {
+            return value;
+        }
+    }
 
     //
     // convert to floating hw point type
@@ -766,7 +850,7 @@ public:
 
     floatbase_t operator-(floatbase_t addend)
     {
-        // TODO: optimize this...
+        // TODO: optimize this to avoid calling decompose here and then again in operator+
         fp_components l = this->decompose();
         fp_components r = addend.decompose();
 
