@@ -3,6 +3,7 @@
 
  conv16to32.cpp
  basic_arith.cpp
+ fp16_to_int_all.cpp
  add16_all.cpp
  mul16_all.cpp
  div16_all.cpp

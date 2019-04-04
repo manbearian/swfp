@@ -54,6 +54,15 @@ template<> struct fp_traits<fp_format::binary128>
    static constexpr uint_t bias = 16383;
 #endif
 
+namespace details {
+    // select T if true, U if false
+    template<bool, typename T, typename U> struct selector_t;
+    template <typename T, typename U> struct selector_t<true, T, U> { using type = T; };
+
+    template<bool, typename T, typename U> struct mint32_t;
+    template <typename T, typename U> struct selector_t<false, T, U> { using type = U; };
+}
+
 template<fp_format format>
 class floatbase_t
 {
@@ -167,51 +176,62 @@ private:
     // convert to integral type
     //
 
+#if defined(EMULATE_INTEL)
+    template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
+    constexpr integral_t intel_bad_value()
+    {
+        if constexpr (sizeof(integral_t) < sizeof(int))
+            return 0;
+        else if constexpr (std::is_unsigned_v<integral_t> && (sizeof(integral_t) == sizeof(int)))
+            return 0;
+        else
+            return std::numeric_limits<std::make_signed_t<integral_t>>::min();
+    }
+#endif
+
 public:
 
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
     explicit operator integral_t()
     {
+        using intermediate_t = std::make_signed_t<details::selector_t<(sizeof(int_t) > sizeof(integral_t)), int_t, integral_t>::type>;
+
         fp_components components = decompose();
-        
+
         switch (components.class_)
         {
         case fp_class::infinity:
             if constexpr (EMULATE_INTEL) {
-                return std::numeric_limits<integral_t>::min();
+                return intel_bad_value<integral_t>();
             }
             else {
                 return components.sign ? std::numeric_limits<integral_t>::min() : std::numeric_limits<integral_t>::max();
             }
         case fp_class::nan:
             if constexpr (EMULATE_INTEL) {
-                return std::numeric_limits<integral_t>::min();
+                return intel_bad_value<integral_t>();
             }
             else {
                 return 0;
             }
+        case fp_class::zero:
+        case fp_class::subnormal:
+            return 0;
         }
 
-        if constexpr (!std::is_signed_v<integral_t>) {
-            if (components.sign) {
-                if constexpr (EMULATE_INTEL) {
-                    return std::numeric_limits<integral_t>::max();
-                }
-                else {
-                    return 0;
-                }
-            }
+        if (components.exponent < 0) {
+            return 0;
         }
 
-        integral_t value = static_cast<integral_t>(components.significand);
+        intermediate_t value = static_cast<intermediate_t>(components.significand);
 
         int bitshift = significand_bitsize - components.exponent;
 
         if (bitshift > 0)
         {
-            if (bitshift > (sizeof(integral_t) * 8)) {
+            if (bitshift > (sizeof(intermediate_t) * 8)) {
                 if constexpr (EMULATE_INTEL) {
-                    return std::numeric_limits<integral_t>::min();
+                    return intel_bad_value<integral_t>();
                 }
                 else {
                     return 0;
@@ -222,9 +242,9 @@ public:
         }
         else if (bitshift < 0)
         {
-            if (-bitshift > (sizeof(integral_t) * 8)) {
+            if (-bitshift > (sizeof(intermediate_t) * 8)) {
                 if constexpr (EMULATE_INTEL) {
-                    return std::numeric_limits<integral_t>::min();
+                    return intel_bad_value<integral_t>();
                 }
                 else {
                     return components.sign ? std::numeric_limits<integral_t>::min() : std::numeric_limits<integral_t>::max();
@@ -234,12 +254,7 @@ public:
             value <<= -bitshift;
         }
 
-        if constexpr (std::is_signed_v<integral_t>) {
-            return components.sign ? -value : value;
-        }
-        else {
-            return value;
-        }
+        return components.sign ? static_cast<integral_t>(-value) : static_cast<integral_t>(value);
     }
 
     //
