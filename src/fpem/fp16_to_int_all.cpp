@@ -65,7 +65,7 @@ void testall()
 {
     cout << "testing '"<< typeid(integral_t).name() << "'";
     // run through all possible values, parallelizing the outer loop
-    std::for_each(std::execution::seq, std::begin(values), std::end(values), [](float16_t a) {
+    std::for_each(std::execution::par_unseq, std::begin(values), std::end(values), [](float16_t a) {
         
         validate_to_conv<integral_t>(a);
 
