@@ -25,7 +25,7 @@ struct validate_base
             cout << "x: " << a << " " << x.to_hex_string() << " " << x.to_triplet_string() << endl;
             cout << "y: " << b << " " << y.to_hex_string() << " " << y.to_triplet_string() << endl;
 
-            float32_t z_ = c;
+            float32_t z_ = (float32_t)c;
             cout << "expected: " << c << " " << z_.to_hex_string() << " " << z_.to_triplet_string() << endl;
             cout << "actual:   " << (float)z << " " << z.to_hex_string() << " " << z.to_triplet_string() << endl;
 
@@ -42,8 +42,8 @@ struct validate_add : public validate_base<validate_add>
     static void validate(float a, float b)
     {
         float c = a + b;
-        float32_t x = a;
-        float32_t y = b;
+        float32_t x = (float32_t)a;
+        float32_t y = (float32_t)b;
         float32_t z = x + y;
 
         check_binary(a, b, c, x, y, z);
@@ -57,8 +57,8 @@ struct validate_sub : public validate_base<validate_sub>
     static void validate(float a, float b)
     {
         float c = a - b;
-        float32_t x = a;
-        float32_t y = b;
+        float32_t x = (float32_t)a;
+        float32_t y = (float32_t)b;
         float32_t z = x - y;
 
         check_binary(a, b, c, x, y, z);
@@ -72,8 +72,8 @@ struct validate_mul : public validate_base<validate_mul>
     static void validate(float a, float b)
     {
         float c = a * b;
-        float32_t x = a;
-        float32_t y = b;
+        float32_t x = (float32_t)a;
+        float32_t y = (float32_t)b;
         float32_t z = x * y;
 
         check_binary(a, b, c, x, y, z);
@@ -87,8 +87,8 @@ struct validate_div : public validate_base<validate_div>
     static void validate(float a, float b)
     {
         float c = a / b;
-        float32_t x = a;
-        float32_t y = b;
+        float32_t x = (float32_t)a;
+        float32_t y = (float32_t)b;
         float32_t z = x / y;
 
         check_binary(a, b, c, x, y, z);
