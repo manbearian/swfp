@@ -168,31 +168,55 @@ public:
     {
         using intermediate_t = std::make_signed_t<details::selector_t<(sizeof(integral_t) > sizeof(uint_t)), std::make_unsigned_t<integral_t>, uint_t>::type>;
 
-        bool sign = false;
-        intermediate_t value;
-        if constexpr (std::is_signed_v<integral_t>)
-        {
-            value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(abs(t)));
-            sign = t < 0;
-        }
-        else
-        {
-            value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(t));
-        }
-
-        unsigned long index;
-        if (!details::bit_scan(&index, value))
-        {
+        if (t == 0) {
             raw_value = 0;
             return;
         }
 
-        if (index < significand_bitsize)
-            value <<= (significand_bitsize - index);
-        else if (index > significand_bitsize)
-            value >>= (index - significand_bitsize);
+        bool sign = false;
+        intermediate_t intermediate_value;
+        if constexpr (std::is_signed_v<integral_t>)
+        {
+            intermediate_value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(abs(t)));
+            sign = t < 0;
+        }
+        else
+        {
+            intermediate_value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(t));
+        }
 
-        raw_value = floatbase_t::normal(sign, index, static_cast<uint_t>(value)).raw_value;
+        unsigned long index;
+        if (!details::bit_scan(&index, intermediate_value))
+        {
+            assert(false); // 0 value checked earlier
+        }
+
+        exponent_t exponent = index;
+        if (exponent > emax) {
+            raw_value = floatbase_t::infinity(sign).raw_value;
+            return;
+        }
+
+        uint_t signficand = static_cast<uint_t>(value);
+        int bitdiff = significand_bitsize - index;
+
+        if (bitdiff < 0)
+        {
+            bitdiff = -bitdiff;
+            intermediate_t intermediate_roundoff_bits = (value & ((intermediate_t(1) << bitdiff) - 1)) << ((sizeof(intermediate_t) * 8) - bitdiff);
+            uint_t roundoff_bits = static_cast<uint_t>(intermediate_roundoff_bits >> (sizeof(intermediate_t) - sizeof(uint_t)));
+            signficand = static_cast<uint_t>(value >> bitdiff);
+            if (!round_significand(signficand, exponent, roundoff_bits)) {
+                raw_value = floatbase_t::infinity(sign).raw_value;
+                return;
+            }
+        }
+        else
+        {
+            signficand <<= bitdiff;
+        }
+
+        raw_value = floatbase_t::normal(sign, exponent, signficand).raw_value;
     }
 
 private:
