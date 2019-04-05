@@ -61,6 +61,21 @@ namespace details {
 
     template<bool, typename T, typename U> struct mint32_t;
     template <typename T, typename U> struct selector_t<false, T, U> { using type = U; };
+
+    template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
+    static bool bit_scan(unsigned long *index, integral_t mask)
+    {
+        if constexpr (sizeof(integral_t) <= 4) {
+            return _BitScanReverse(index, mask);
+        }
+        else if constexpr (sizeof(integral_t) == 8) {
+            return !_BitScanReverse64(index, significand);
+        }
+        else {
+            static_assert(false, "NYI: significand_adjustment for this size");
+            return false;
+        }
+    }
 }
 
 template<fp_format format>
@@ -105,15 +120,7 @@ public:
     // default is uninit, just like built-in FP types
     floatbase_t() = default;
 
-    //
-    // construction from hw fp types
-    //
-
-    template<typename T = hwfp_t, typename = std::enable_if_t<std::is_same_v<T, hwfp_t>> > // triggers SFINAE and disables ctor if hwfp_t is void
-    constexpr floatbase_t(T hwf) {
-        memcpy(&raw_value, &hwf, sizeof(T));
-    }
-
+    // construct from 32-bit built-in floating-point type
     explicit constexpr floatbase_t(float hwf)
     {
         if constexpr (format == fp_format::binary16)
@@ -134,6 +141,7 @@ public:
         }
     }
 
+    // construct from 64-bit built-in floating-point type
     explicit constexpr floatbase_t(double hwf)
     {
         if constexpr (format == fp_format::binary16)
@@ -154,11 +162,40 @@ public:
         }
     }
 
+    // construct from built-in ingegral type
+    template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
+    explicit constexpr floatbase_t(integral_t t)
+    {
+        using intermediate_t = std::make_signed_t<details::selector_t<(sizeof(integral_t) > sizeof(uint_t)), std::make_unsigned_t<integral_t>, uint_t>::type>;
+
+        bool sign = false;
+        intermediate_t value;
+        if constexpr (std::is_signed_v<integral_t>)
+        {
+            value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(abs(t)));
+            sign = t < 0;
+        }
+        else
+        {
+            value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(t));
+        }
+
+        unsigned long index;
+        if (!details::bit_scan(&index, value))
+        {
+            raw_value = 0;
+            return;
+        }
+
+        if (index < significand_bitsize)
+            value <<= (significand_bitsize - index);
+        else if (index > significand_bitsize)
+            value >>= (index - significand_bitsize);
+
+        raw_value = floatbase_t::normal(sign, index, static_cast<uint_t>(value)).raw_value;
+    }
+
 private:
-    // initialize from raw bits
-    explicit constexpr floatbase_t(uint_t val) :
-        raw_value(val)
-    { }
 
     constexpr floatbase_t(uint_t sign, uint_t exponent, uint_t significand) :
         raw_value((sign << (bitsize - 1)) | (exponent << significand_bitsize) | significand)
@@ -574,21 +611,13 @@ private:
         constexpr unsigned long keybit = significand_bitsize;
 
         unsigned long index;
-        if constexpr (sizeof(uint_t) <= 4) {
-            if (!_BitScanReverse(&index, significand)) {
-                return keybit;
-            }
-        }
-        else if constexpr (sizeof(uint_t) == 8) {
-            if (!_BitScanReverse64(&index, significand)) {
-                return keybit;
-            }
-        }
-        else {
-            static_assert(false, "NYI: significand_adjustment for this size");
+        if (details::bit_scan(&index, significand))
+        {
+            return keybit - index;
         }
 
-        return keybit - index;
+        return keybit;
+
     }
 
     // increase the exponent value and report if overflow occured
@@ -1196,7 +1225,7 @@ public:
     // publicly expose private constructors as factory functions. This is done
     // to keep floatbase_t interface similar to built-in float/double while
     // still allowing easy creation from integer values.
-    static floatbase_t from_bitstring(uint_t t) { return floatbase_t{ t }; }
+    static floatbase_t from_bitstring(uint_t t) { auto f = floatbase_t{}; f.raw_value = t; return f; }
     static floatbase_t from_triplet(bool sign, exponent_t exponent, uint_t significand) {
         return floatbase_t{ static_cast<uint_t>(sign), static_cast<uexponent_t>(exponent), significand };
     }
