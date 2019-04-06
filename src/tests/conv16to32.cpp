@@ -9,7 +9,7 @@ using std::endl;
 
 #include <limits>
 
-#include "fpcore.h"
+#include "swfp.h"
 
 
 void validate_cast(float16_t a, float16_t b, float32_t x)

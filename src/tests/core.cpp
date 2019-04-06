@@ -9,7 +9,7 @@
 
 #include <limits>
 
-#include "fpcore.h"
+#include "swfp.h"
 
 // disable constant arithmetic warnings
 #pragma warning(disable:4756)

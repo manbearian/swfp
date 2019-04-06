@@ -1,0 +1,2 @@
+ -EHsc -std:c++17 -Zi -W4 -diagnostics:caret -MDd -I..
+core.cpp 
