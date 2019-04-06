@@ -93,7 +93,8 @@ int main()
         testall<int64_t>();
         testall<uint64_t>();
 #endif
-        validate_int_to_fp<int>(12345);
+       // for ()
+        validate_int_to_fp<short>(std::numeric_limits<short>::max());
     }
     catch (std::exception e)
     {
