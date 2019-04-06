@@ -197,15 +197,15 @@ public:
             return;
         }
 
-        uint_t signficand = static_cast<uint_t>(value);
+        uint_t signficand = static_cast<uint_t>(intermediate_value);
         int bitdiff = significand_bitsize - index;
 
         if (bitdiff < 0)
         {
             bitdiff = -bitdiff;
-            intermediate_t intermediate_roundoff_bits = (value & ((intermediate_t(1) << bitdiff) - 1)) << ((sizeof(intermediate_t) * 8) - bitdiff);
+            intermediate_t intermediate_roundoff_bits = (intermediate_value & ((intermediate_t(1) << bitdiff) - 1)) << ((sizeof(intermediate_t) * 8) - bitdiff);
             uint_t roundoff_bits = static_cast<uint_t>(intermediate_roundoff_bits >> (sizeof(intermediate_t) - sizeof(uint_t)));
-            signficand = static_cast<uint_t>(value >> bitdiff);
+            signficand = static_cast<uint_t>(intermediate_value >> bitdiff);
             if (!round_significand(signficand, exponent, roundoff_bits)) {
                 raw_value = floatbase_t::infinity(sign).raw_value;
                 return;
