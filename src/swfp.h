@@ -27,21 +27,18 @@ template<fp_format f> struct fp_traits { };
 template<> struct fp_traits<fp_format::binary16>
 {
    using uint_t = uint16_t;
-   using hwfp_t = void;
    static constexpr uint_t exponent_bitsize = 5;
    static constexpr uint_t bias = 15;
 };
 template<> struct fp_traits<fp_format::binary32>
 {
    using uint_t = uint32_t;
-   using hwfp_t = float;
    static constexpr uint_t exponent_bitsize = 8;
    static constexpr uint_t bias = 127;
 };
 template<> struct fp_traits<fp_format::binary64>
 {
    using uint_t = uint64_t;
-   using hwfp_t = double;
    static constexpr uint_t exponent_bitsize = 11;
    static constexpr uint_t bias = 1023;
 };
@@ -49,27 +46,28 @@ template<> struct fp_traits<fp_format::binary64>
 template<> struct fp_traits<fp_format::binary128>
 {
    using uint_t = uint128_t;
-   using hwfp_t = long double;
    static constexpr uint_t exponent_bitsize = 15;
    static constexpr uint_t bias = 16383;
 #endif
 
 namespace details {
     // select T if true, U if false
-    template<bool, typename T, typename U> struct selector_t;
-    template <typename T, typename U> struct selector_t<true, T, U> { using type = T; };
+    template<bool, typename T, typename U> struct selector;
+    template <typename T, typename U> struct selector<true, T, U> { using type = T; };
 
     template<bool, typename T, typename U> struct mint32_t;
-    template <typename T, typename U> struct selector_t<false, T, U> { using type = U; };
+    template <typename T, typename U> struct selector<false, T, U> { using type = U; };
+
+    template<bool a, typename T, typename U> using selector_t = typename selector<a, T, U>::type;
 
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
     static bool bit_scan(unsigned long *index, integral_t mask)
     {
         if constexpr (sizeof(integral_t) <= 4) {
-            return _BitScanReverse(index, mask);
+            return _BitScanReverse(index, static_cast<std::make_unsigned_t<integral_t>>(mask));
         }
         else if constexpr (sizeof(integral_t) == 8) {
-            return !_BitScanReverse64(index, significand);
+            return _BitScanReverse64(index, mask);
         }
         else {
             static_assert(false, "NYI: significand_adjustment for this size");
@@ -86,7 +84,6 @@ private:
 
     using uint_t = typename fp_traits::uint_t;
     using int_t = std::make_signed_t<uint_t>;
-    using hwfp_t = typename fp_traits::hwfp_t;
 
     using exponent_t = int32_t; // use signed ints for performance for exponent
     using uexponent_t = std::make_unsigned_t<exponent_t>;
@@ -154,7 +151,7 @@ public:
         }
         else if constexpr (format == fp_format::binary64)
         {
-            memcpy(&raw_value, &hwf, sizeof(float));
+            memcpy(&raw_value, &hwf, sizeof(double));
         }
         else
         {
@@ -166,7 +163,8 @@ public:
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
     explicit constexpr floatbase_t(integral_t t)
     {
-        using intermediate_t = std::make_signed_t<details::selector_t<(sizeof(integral_t) > sizeof(uint_t)), std::make_unsigned_t<integral_t>, uint_t>::type>;
+        using uintegral_t = std::make_unsigned_t<integral_t>;
+        using intermediate_t = details::selector_t<(sizeof(uintegral_t) > sizeof(uint_t)), uintegral_t, uint_t>;
 
         if (t == 0) {
             raw_value = 0;
@@ -177,12 +175,12 @@ public:
         intermediate_t intermediate_value;
         if constexpr (std::is_signed_v<integral_t>)
         {
-            intermediate_value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(abs(t)));
+            intermediate_value = static_cast<intermediate_t>(static_cast<uintegral_t>(abs(t)));
             sign = t < 0;
         }
         else
         {
-            intermediate_value = static_cast<intermediate_t>(static_cast<std::make_unsigned_t<integral_t>>(t));
+            intermediate_value = static_cast<intermediate_t>(static_cast<uintegral_t>(t));
         }
 
         unsigned long index;
@@ -204,7 +202,10 @@ public:
         {
             bitdiff = -bitdiff;
             intermediate_t intermediate_roundoff_bits = (intermediate_value & ((intermediate_t(1) << bitdiff) - 1)) << ((sizeof(intermediate_t) * 8) - bitdiff);
-            uint_t roundoff_bits = static_cast<uint_t>(intermediate_roundoff_bits >> (sizeof(intermediate_t) - sizeof(uint_t)));
+            if constexpr (sizeof(intermediate_t) > sizeof(uint_t)) {
+                intermediate_roundoff_bits >>= (sizeof(intermediate_t) - sizeof(uint_t)) * 8;
+            }
+            uint_t roundoff_bits = static_cast<uint_t>(intermediate_roundoff_bits);
             signficand = static_cast<uint_t>(intermediate_value >> bitdiff);
             if (!round_significand(signficand, exponent, roundoff_bits)) {
                 raw_value = floatbase_t::infinity(sign).raw_value;
@@ -255,7 +256,7 @@ public:
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
     explicit operator integral_t()
     {
-        using intermediate_t = std::make_signed_t<details::selector_t<(sizeof(int_t) > sizeof(integral_t)), int_t, integral_t>::type>;
+        using intermediate_t = details::selector_t<(sizeof(int_t) > sizeof(integral_t)), int_t, std::make_signed_t<integral_t>>;
 
         fp_components components = decompose();
 
@@ -422,7 +423,7 @@ public:
         }
 
         exponent -= bias;
-        wide_significand |= (1 << significand_bitsize);
+        wide_significand |= (uint_t(1) << significand_bitsize);
 
         narrowfp_t::uint_t narrow_significand = static_cast<narrowfp_t::uint_t>(wide_significand >> significand_bitdiff);
         narrowfp_t::uint_t roundoff_bits = static_cast<narrowfp_t::uint_t>((wide_significand & mask) << (narrowfp_t::bitsize - significand_bitdiff));
@@ -693,8 +694,8 @@ private:
         fp_components components;
         components.class_ = fp_class::nan;
         components.sign = raw_value >> (bitsize - 1);
-        components.exponent = (raw_value & ~(1 << (bitsize - 1))) >> significand_bitsize;
-        components.significand = (raw_value & ((1 << significand_bitsize) - 1));
+        components.exponent = (raw_value & ~(uint_t(1) << (bitsize - 1))) >> significand_bitsize;
+        components.significand = (raw_value & ((uint_t(1) << significand_bitsize) - 1));
 
         if (components.exponent == 0)
         {
@@ -723,7 +724,7 @@ private:
         {
             components.exponent -= bias;
             components.class_ = fp_class::normal;
-            components.significand |= (1 << significand_bitsize);
+            components.significand |= (uint_t(1) << significand_bitsize);
         }
 
         return components;
@@ -1251,7 +1252,7 @@ public:
     // still allowing easy creation from integer values.
     static floatbase_t from_bitstring(uint_t t) { auto f = floatbase_t{}; f.raw_value = t; return f; }
     static floatbase_t from_triplet(bool sign, exponent_t exponent, uint_t significand) {
-        return floatbase_t{ static_cast<uint_t>(sign), static_cast<uexponent_t>(exponent), significand };
+        return floatbase_t{ static_cast<uint_t>(sign), exponent, significand };
     }
 };
 
