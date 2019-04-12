@@ -126,6 +126,7 @@ public:
         }
         else if constexpr (format == fp_format::binary32)
         {
+            //std::bit_cast()
             memcpy(&raw_value, &hwf, sizeof(float));
         }
         else if constexpr (format == fp_format::binary64)
@@ -151,6 +152,7 @@ public:
         }
         else if constexpr (format == fp_format::binary64)
         {
+            //std::bit_cast()
             memcpy(&raw_value, &hwf, sizeof(double));
         }
         else
@@ -689,7 +691,7 @@ private:
         uint_t significand;
     };
 
-    fp_components decompose()
+    fp_components decompose() const
     {
         fp_components components;
         components.class_ = fp_class::nan;
@@ -760,7 +762,7 @@ public:
 
 public:
 
-    floatbase_t operator+(floatbase_t addend)
+    floatbase_t operator+(floatbase_t addend) const
     {
         fp_components l = this->decompose();
         fp_components r = addend.decompose();
@@ -917,7 +919,7 @@ public:
         return normal(sign, exponent, significand);
     }
 
-    floatbase_t operator-(floatbase_t addend)
+    floatbase_t operator-(floatbase_t addend) const
     {
         // TODO: optimize this to avoid calling decompose here and then again in operator+
         fp_components l = this->decompose();
@@ -933,7 +935,7 @@ public:
         return this->operator+(-addend);
     }
 
-    floatbase_t operator*(floatbase_t addend)
+    floatbase_t operator*(floatbase_t addend) const
     {
         fp_components l = this->decompose();
         fp_components r = addend.decompose();
@@ -949,15 +951,15 @@ public:
             if (r.class_ == fp_class::zero) {
                 return indeterminate_nan();
             }
-            this->raw_value ^= (sign_mask & addend.raw_value);
-            return *this;
+            return floatbase_t::from_bitstring(this->raw_value ^ (sign_mask & addend.raw_value));
+
         }
         else if (r.class_ == fp_class::infinity) {
             if (l.class_ == fp_class::zero) {
                 return indeterminate_nan();
             }
-            addend.raw_value ^= (sign_mask & this->raw_value);
-            return addend;
+
+            return floatbase_t::from_bitstring(addend.raw_value ^ (sign_mask & this->raw_value));
         }
 
         uint8_t sign = l.sign ^ r.sign;
@@ -1087,7 +1089,7 @@ public:
         return normal(sign, exponent, significand);
     }
 
-    void long_division(int_t dividend, int_t divisor, uint_t& quotient, uint_t& remainder)
+    static void long_division(int_t dividend, int_t divisor, uint_t& quotient, uint_t& remainder)
     {
         quotient = long_division_loop(dividend, divisor);
         remainder = long_division_loop(dividend, divisor);
@@ -1101,7 +1103,7 @@ public:
     }
 
     // compute binary long division
-    uint_t long_division_loop(int_t& dividend, int_t divisor)
+    static uint_t long_division_loop(int_t& dividend, int_t divisor)
     {
         int_t quotient = 0;
 
@@ -1118,7 +1120,7 @@ public:
         return static_cast<uint_t>(quotient);
     }
 
-    floatbase_t operator/(floatbase_t denomenator)
+    floatbase_t operator/(floatbase_t denomenator) const
     {
         fp_components l = this->decompose();
         fp_components r = denomenator.decompose();
@@ -1213,7 +1215,7 @@ public:
         return normal(sign, exponent, significand);
     }
 
-    floatbase_t operator-()
+    floatbase_t operator-() const
     {
         floatbase_t neg = *this;
         neg.raw_value ^= (uint_t(1) << (bitsize - 1));
@@ -1224,10 +1226,12 @@ public:
     // Comparison
     //
 public:
+
     bool operator==(floatbase_t other)
     {
         auto is_nan = [](uint_t x) {
-            return (((x & exponent_mask) >> significand_bitsize) == exponent_mask) && ((x & significand_mask) != 0);
+            constexpr uint_t exp_mask = (exponent_mask << significand_bitsize);
+            return ((x & exp_mask) == exp_mask) && ((x & significand_mask) != 0);
         };
 
         if (this->raw_value == other.raw_value)
@@ -1236,15 +1240,121 @@ public:
                 return false;
             return true;
         }
+
+        if ((this->raw_value == 0) && (other.raw_value == floatbase_t::zero(1).raw_value)) {
+            return true;
+        }
+            
+        if ((other.raw_value == 0) && (this->raw_value == floatbase_t::zero(1).raw_value)) {
+            return true;
+        }
+
         return false;
     }
 
     bool operator!=(floatbase_t other) { return !operator==(other); }
 
+ private:
+ 
+    template<bool check_eq>
+    static bool compare_lt(const fp_components &l, const fp_components &r)
+    {
+        // Special case 0 to handle -0.0 and the fact that 0 has bigger exponent then values < 1.0f
+        if (l.class_ == fp_class::zero)
+        {
+            if (r.class_ == fp_class::zero) {
+                return check_eq;
+            }
+
+            return !r.sign;
+        }
+        else if (r.class_ == fp_class::zero)
+        {
+            return l.sign;
+        }
+
+        // negatives always less than positives
+        if (l.sign && !r.sign) {
+            return true;
+        }
+        else if (r.sign && !l.sign) {
+            return false;
+        }
+
+        if (l.exponent < r.exponent) {
+            return !l.sign;
+        }
+        else if (l.exponent > r.exponent) {
+            return l.sign;
+        }
+
+        if (l.significand < r.significand) {
+            return !l.sign;
+        }
+        else if (l.significand > r.significand) {
+            return l.sign;
+        }
+
+        return check_eq;
+    }
+
+ public:
+
+    bool operator<(floatbase_t other)
+    {
+        fp_components l = this->decompose();
+        fp_components r = other.decompose();
+
+        // NaN's always compare false
+        if (l.class_ == fp_class::nan || r.class_ == fp_class::nan) {
+            return false;
+        }
+
+        return compare_lt<false>(l, r);
+    }
+
+    bool operator<=(floatbase_t other)
+    {
+        fp_components l = this->decompose();
+        fp_components r = other.decompose();
+
+        // NaN's always compare false
+        if (l.class_ == fp_class::nan || r.class_ == fp_class::nan) {
+            return false;
+        }
+
+        return compare_lt<true>(l, r);
+    }
+
+    bool operator>(floatbase_t other)
+    {
+        fp_components l = this->decompose();
+        fp_components r = other.decompose();
+
+        // NaN's always compare false
+        if (l.class_ == fp_class::nan || r.class_ == fp_class::nan) {
+            return false;
+        }
+        return compare_lt<false>(r, l);
+    }
+
+    bool operator>=(floatbase_t other)
+    {
+        fp_components l = this->decompose();
+        fp_components r = other.decompose();
+
+        // NaN's always compare false
+        if (l.class_ == fp_class::nan || r.class_ == fp_class::nan) {
+            return false;
+        }
+
+        return compare_lt<true>(r, l);
+    }
 
     //
     // public utitliy functions
     //
+
 public:
 
     // publicly expose private constructors as factory functions. This is done

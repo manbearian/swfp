@@ -3,12 +3,14 @@
 
  conv16to32.cpp
  basic_arith.cpp
+ basic_comp.cpp
  fp16_to_int_all.cpp
  int_to_fp16_all.cpp
  int_to_fp_misc.cpp
  add16_all.cpp
  mul16_all.cpp
  div16_all.cpp
+ comp16_all.cpp
 
 ) do @(
  cl -nologo -EHsc -std:c++17 -Zi -W4 -diagnostics:caret -O2 -DNDEBUG -I.. %%~nx.cpp && %%~nx.exe
