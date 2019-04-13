@@ -126,8 +126,11 @@ public:
         }
         else if constexpr (format == fp_format::binary32)
         {
-            //std::bit_cast()
-            memcpy(&raw_value, &hwf, sizeof(float));
+#if BIT_CAST_EXISTS
+            *this = std::bit_cast<uint_t>(hwf);
+#else
+            memcpy(this, &hwf, sizeof(float));
+#endif
         }
         else if constexpr (format == fp_format::binary64)
         {
@@ -152,8 +155,11 @@ public:
         }
         else if constexpr (format == fp_format::binary64)
         {
-            //std::bit_cast()
-            memcpy(&raw_value, &hwf, sizeof(double));
+#if BIT_CAST_EXISTS
+            *this = std::bit_cast<uint_t>(hwf);
+#else
+            memcpy(this, &hwf, sizeof(double));
+#endif
         }
         else
         {
