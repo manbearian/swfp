@@ -1,3 +1,6 @@
+
+#pragma once
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <memory>
@@ -9,7 +12,10 @@
 #include <algorithm>
 #include <intrin.h>
 
-// Emulate IA32/IA32-64 behavior when outside the bounds of IEEE754
+#include "swhelp.h"
+#include "swint.h"
+
+// Emulate IA32/IA32_64 behavior when outside the bounds of IEEE754
 #define EMULATE_INTEL 1
 
 
@@ -27,88 +33,27 @@ template<fp_format f> struct fp_traits { };
 template<> struct fp_traits<fp_format::binary16>
 {
    using uint_t = uint16_t;
-   static constexpr uint_t exponent_bitsize = 5;
-   static constexpr uint_t bias = 15;
+   static constexpr int exponent_bitsize = 5;
+   static constexpr int bias = 15;
 };
 template<> struct fp_traits<fp_format::binary32>
 {
    using uint_t = uint32_t;
-   static constexpr uint_t exponent_bitsize = 8;
-   static constexpr uint_t bias = 127;
+   static constexpr int exponent_bitsize = 8;
+   static constexpr int bias = 127;
 };
 template<> struct fp_traits<fp_format::binary64>
 {
    using uint_t = uint64_t;
-   static constexpr uint_t exponent_bitsize = 11;
-   static constexpr uint_t bias = 1023;
+   static constexpr int exponent_bitsize = 11;
+   static constexpr int bias = 1023;
 };
-#if 0
 template<> struct fp_traits<fp_format::binary128>
 {
-   using uint_t = uint128_t;
-   static constexpr uint_t exponent_bitsize = 15;
-   static constexpr uint_t bias = 16383;
-#endif
-
-namespace details {
-    // select T if true, U if false
-    template<bool, typename T, typename U> struct selector;
-    template <typename T, typename U> struct selector<true, T, U> { using type = T; };
-
-    template<bool, typename T, typename U> struct mint32_t;
-    template <typename T, typename U> struct selector<false, T, U> { using type = U; };
-
-    template<bool a, typename T, typename U> using selector_t = typename selector<a, T, U>::type;
-
-    template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-    static constexpr bool bit_scan(unsigned long *index, integral_t mask)
-    {
-#if IS_CONSTANT_EVALUATED_EXISTS
-        if (std::is_constant_evaluated())
-        {
-            // brain-dead implementation of bitscan for constexpr evaluation
-            for (int i = (sizeof(integral_t) * 8) - 1; i >= 0; --i)
-            {
-                if (((integral_t(1) << i) & mask) != 0) {
-                    *index = i;
-                    return true;
-                }
-            }
-
-            *index = 0;
-            return false;
-        }
-        else
-#endif
-        {
-            if constexpr (sizeof(integral_t) <= 4) {
-                return _BitScanReverse(index, static_cast<std::make_unsigned_t<integral_t>>(mask));
-            }
-            else if constexpr (sizeof(integral_t) == 8) {
-                return _BitScanReverse64(index, mask);
-            }
-            else {
-                static_assert(false, "NYI: significand_adjustment for this size");
-                return false;
-            }
-        }
-    }
-
-#if BIT_CAST_EXISTS
-    using std::bit_cast;
-#else
-    template< typename to_t, typename from_t, typename = std::enable_if_t<
-        (sizeof(to_t) == sizeof(from_t))
-        && std::is_trivially_copyable_v<from_t>
-        && std::is_trivial_v<to_t>
-    >>
-    to_t bit_cast(const from_t& from) noexcept {
-        to_t to;
-        memcpy(&to, &from, sizeof(from_t));
-        return to;
-    }
-#endif
-}
+    using uint_t = uint128_t;
+    static constexpr int exponent_bitsize = 15;
+    static constexpr int bias = 16383;
+};
 
 template<fp_format format>
 class floatbase_t
@@ -117,14 +62,14 @@ private:
     using fp_traits = fp_traits<format>;
 
     using uint_t = typename fp_traits::uint_t;
-    using int_t = std::make_signed_t<uint_t>;
+    using int_t = details::make_signed_t<uint_t>;
 
     using exponent_t = int32_t; // use signed ints for performance for exponent
     using uexponent_t = std::make_unsigned_t<exponent_t>;
 
-    static constexpr uint_t bitsize = sizeof(uint_t) * 8;
-    static constexpr uint_t exponent_bitsize = fp_traits::exponent_bitsize;
-    static constexpr uint_t significand_bitsize = bitsize - exponent_bitsize - 1;
+    static constexpr int bitsize = sizeof(uint_t) * 8;
+    static constexpr int exponent_bitsize = fp_traits::exponent_bitsize;
+    static constexpr int significand_bitsize = bitsize - exponent_bitsize - 1;
     static constexpr uint_t exponent_mask = (uint_t(1) << exponent_bitsize) - 1;
     static constexpr uint_t significand_mask = (uint_t(1) << significand_bitsize) - 1;
     static constexpr uint_t sign_mask = uint_t(1) << (bitsize - 1);
@@ -166,6 +111,10 @@ public:
         {
             *this = float64_t(float32_t(hwf));
         }
+        else if constexpr (format == fp_format::binary128)
+        {
+            *this = float128_t(float32_t(hwf));
+        }
         else
         {
             static_assert(false, "nyi: convert from hw float32");
@@ -186,6 +135,10 @@ public:
         else if constexpr (format == fp_format::binary64)
         {
             *this = details::bit_cast<floatbase_t>(hwf);
+        }
+        else if constexpr (format == fp_format::binary128)
+        {
+            *this = float128_t(float64_t(hwf));
         }
         else
         {
@@ -218,7 +171,7 @@ public:
         }
 
         unsigned long index;
-        if (!details::bit_scan(&index, intermediate_value))
+        if (!details::reverse_bit_scan(&index, intermediate_value))
         {
             assert(false); // 0 value checked earlier
         }
@@ -545,14 +498,12 @@ public:
         }
     }
 
-#if 0
     explicit constexpr operator floatbase_t<fp_format::binary128>() const
     {
         static_assert(format != fp_format::binary128, "convert from T to T is impossible");
 
         return to_widefp<float128_t>();
     }
-#endif
 
 
     //
@@ -666,7 +617,7 @@ private:
         constexpr unsigned long keybit = significand_bitsize;
 
         unsigned long index = 0;
-        if (details::bit_scan(&index, significand))
+        if (details::reverse_bit_scan(&index, significand))
         {
             return keybit - index;
         }
@@ -1399,3 +1350,4 @@ public:
 using float16_t = floatbase_t<fp_format::binary16>;
 using float32_t = floatbase_t<fp_format::binary32>;
 using float64_t = floatbase_t<fp_format::binary64>;
+using float128_t = floatbase_t<fp_format::binary128>;

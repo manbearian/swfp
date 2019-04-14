@@ -17,84 +17,109 @@
 using std::cout;
 using std::endl;
 
-//
-// Validate all 16-bit div operations
-//  compute in HW at 32-bit and compare to 16-bit output
-//  tests both DIV and NARROW operations
-//
+template<size_t byte_size> struct make_integral { using type = void; };
+template<> struct make_integral<8> { using type = uint64_t;  };
+template<> struct make_integral<4> { using type = uint32_t; };
+template<> struct make_integral<2> { using type = uint16_t; };
 
-template<bool, typename T> struct mint32_t;
-template <typename T> struct mint32_t<true, T> { using int_t = int; };
-template<bool, typename T> struct mint32_t;
-template <typename T> struct mint32_t<false, T> { using int_t = T; };
 
-template<typename integral_t>
-void validate_int_to_fp(integral_t a)
+
+template<typename sw_t, typename integral_t>
+void test_value(integral_t x)
 {
-    using display_t = mint32_t<(sizeof(integral_t) < sizeof(int)), integral_t>::int_t;
+    using display_t = details::selector_t<(sizeof(sw_t) > sizeof(int)), int64_t, int>;
 
-    float16_t f = static_cast<float16_t>(a);
-    float fx = static_cast<float>(a);
-    float16_t g = static_cast<float16_t>(fx);
+    using hw_t = typename make_integral<(sizeof(sw_t))>::type;
 
-    if (memcmp(&f, &g, sizeof(f)) != 0)
+    if constexpr (std::is_integral_v<hw_t>)
     {
-        cout << "failed!" << endl;
-        cout << "a: 0x" << std::hex << display_t(a) << endl;
-        cout << "sw_to_f16: " << (float)f << " " << f.to_hex_string() << " " << f.to_triplet_string() << endl;
-        cout << "hw_to_f32: " << (float)g << " " << g.to_hex_string() << " " << g.to_triplet_string() << endl;
+        hw_t hw = static_cast<hw_t>(x);
+        sw_t sw = static_cast<sw_t>(x);
 
-        throw std::exception("bad conv");
+        if (memcmp(&hw, &sw, sizeof(hw_t))) {
+            cout << std::hex << "original: 0x" << x << endl;
+            cout << std::hex << "to_hw: 0x" << (display_t)hw << endl;
+            cout << std::hex << "to_sw: 0x" << (display_t)sw << endl;
+            cout << "integral_t: " << typeid(integral_t).name() << endl;
+            cout << "sw_t: " << typeid(sw_t).name() << endl;
+            cout << "hw_t: " << typeid(hw_t).name() << endl;
+            throw std::exception("bad cast");
+        }
+
+        integral_t a = static_cast<integral_t>(hw);
+        integral_t b = static_cast<integral_t>(sw);
+
+        if (memcmp(&a, &b, sizeof(integral_t))) {
+            cout << std::hex << "original: 0x" << x << endl;
+            cout << std::hex << "from_hw: 0x" << (display_t)a << endl;
+            cout << std::hex << "from_sw: 0x" << (display_t)b << endl;
+            cout << "integral_t: " << typeid(integral_t).name() << endl;
+            cout << "sw_t: " << typeid(sw_t).name() << endl;
+            cout << "hw_t: " << typeid(hw_t).name() << endl;
+            throw std::exception("bad cast");
+        }
+    }
+    else
+    {
+        sw_t sw = static_cast<sw_t>(x);
+        integral_t b = static_cast<integral_t>(sw);
+
+        if (memcmp(&x, &b, sizeof(integral_t))) {
+            cout << std::hex << "original: 0x" << x << endl;
+            cout << std::hex << "to_sw: 0x" << (display_t)sw << endl;
+            cout << std::hex << "from_sw: 0x" << (display_t)b << endl;
+            cout << "integral_t: " << typeid(integral_t).name() << endl;
+            cout << "sw_t: " << typeid(sw_t).name() << endl;
+            throw std::exception("bad cast");
+        }
     }
 }
-
-// fill array with values for std::for_each
-uint32_t values[std::numeric_limits<uint16_t>::max() + 1];
-
-std::atomic<int> count;
-
-template<typename integral_t>
-void testall()
-{
-    cout << "testing '"<< typeid(integral_t).name() << "'";
-
-    // run through all possible values, parallelizing the outer loop
-    std::for_each(std::execution::seq, std::begin(values), std::end(values), [](uint16_t a) {
-
-        validate_int_to_fp<integral_t>(a);
-
-        // output progress
-        int old_value = count.fetch_add(1);
-        if (old_value % 10000 == 0) {
-            cout << ".";
-        }
-    });
-
-    cout << "completed\n";
-}
-
 
 int main()
 {
-    // initialize values
-    for (int i = 0; i < std::numeric_limits<uint16_t>::max(); ++i) {
-        values[i] = uint16_t(i);
-    }
-
     try
     {
-#if 0
-        testall<int8_t>();
-        testall<uint8_t>();
-        testall<int16_t>();
-        testall<uint16_t>();
-        testall<int32_t>();
-        testall<uint32_t>();
-        testall<int64_t>();
-        testall<uint64_t>();
+#if 1
+        for (int i = 0; i < std::numeric_limits<uint16_t>::max() * 2; ++i) {
+            test_value<int16sw_t>(static_cast<int8_t>(i));
+            test_value<uint16sw_t>(static_cast<uint8_t>(i));
+            test_value<int16sw_t>(static_cast<int16_t>(i));
+            test_value<uint16sw_t>(static_cast<uint16_t>(i));
+            test_value<int16sw_t>(static_cast<int32_t>(i));
+            test_value<uint16sw_t>(static_cast<uint32_t>(i));
+            test_value<int16sw_t>(static_cast<int64_t>(i));
+            test_value<uint16sw_t>(static_cast<uint64_t>(i));
+
+            test_value<int32sw_t>(static_cast<int8_t>(i));
+            test_value<uint32sw_t>(static_cast<uint8_t>(i));
+            test_value<int32sw_t>(static_cast<int16_t>(i));
+            test_value<uint32sw_t>(static_cast<uint16_t>(i));
+            test_value<int32sw_t>(static_cast<int32_t>(i));
+            test_value<uint32sw_t>(static_cast<uint32_t>(i));
+            test_value<int32sw_t>(static_cast<int64_t>(i));
+            test_value<uint32sw_t>(static_cast<uint64_t>(i));
+
+            test_value<int64sw_t>(static_cast<int8_t>(i));
+            test_value<uint64sw_t>(static_cast<uint8_t>(i));
+            test_value<int64sw_t>(static_cast<int16_t>(i));
+            test_value<uint64sw_t>(static_cast<uint16_t>(i));
+            test_value<int64sw_t>(static_cast<int32_t>(i));
+            test_value<uint64sw_t>(static_cast<uint32_t>(i));
+            test_value<int64sw_t>(static_cast<int64_t>(i));
+            test_value<uint64sw_t>(static_cast<uint64_t>(i));
+
+            test_value<int128sw_t>(static_cast<int8_t>(i));
+            test_value<uint128sw_t>(static_cast<uint8_t>(i));
+            test_value<int128sw_t>(static_cast<int16_t>(i));
+            test_value<uint128sw_t>(static_cast<uint16_t>(i));
+            test_value<int128sw_t>(static_cast<int32_t>(i));
+            test_value<uint128sw_t>(static_cast<uint32_t>(i));
+            test_value<int128sw_t>(static_cast<int64_t>(i));
+            test_value<uint128sw_t>(static_cast<uint64_t>(i));
+        }
+#else
+        test_value<int16sw_t, int>(0x10000);
 #endif
-       // for ()
-        validate_int_to_fp<short>(std::numeric_limits<short>::max());
     }
     catch (std::exception e)
     {
