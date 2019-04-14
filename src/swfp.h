@@ -61,19 +61,53 @@ namespace details {
     template<bool a, typename T, typename U> using selector_t = typename selector<a, T, U>::type;
 
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-    static bool bit_scan(unsigned long *index, integral_t mask)
+    static constexpr bool bit_scan(unsigned long *index, integral_t mask)
     {
-        if constexpr (sizeof(integral_t) <= 4) {
-            return _BitScanReverse(index, static_cast<std::make_unsigned_t<integral_t>>(mask));
-        }
-        else if constexpr (sizeof(integral_t) == 8) {
-            return _BitScanReverse64(index, mask);
-        }
-        else {
-            static_assert(false, "NYI: significand_adjustment for this size");
+#if IS_CONSTANT_EVALUATED_EXISTS
+        if (std::is_constant_evaluated())
+        {
+            // brain-dead implementation of bitscan for constexpr evaluation
+            for (int i = (sizeof(integral_t) * 8) - 1; i >= 0; --i)
+            {
+                if (((integral_t(1) << i) & mask) != 0) {
+                    *index = i;
+                    return true;
+                }
+            }
+
+            *index = 0;
             return false;
         }
+        else
+#endif
+        {
+            if constexpr (sizeof(integral_t) <= 4) {
+                return _BitScanReverse(index, static_cast<std::make_unsigned_t<integral_t>>(mask));
+            }
+            else if constexpr (sizeof(integral_t) == 8) {
+                return _BitScanReverse64(index, mask);
+            }
+            else {
+                static_assert(false, "NYI: significand_adjustment for this size");
+                return false;
+            }
+        }
     }
+
+#if BIT_CAST_EXISTS
+    using std::bit_cast;
+#else
+    template< typename to_t, typename from_t, typename = std::enable_if_t<
+        (sizeof(to_t) == sizeof(from_t))
+        && std::is_trivially_copyable_v<from_t>
+        && std::is_trivial_v<to_t>
+    >>
+    to_t bit_cast(const from_t& from) noexcept {
+        to_t to;
+        memcpy(&to, &from, sizeof(from_t));
+        return to;
+    }
+#endif
 }
 
 template<fp_format format>
@@ -126,11 +160,7 @@ public:
         }
         else if constexpr (format == fp_format::binary32)
         {
-#if BIT_CAST_EXISTS
-            *this = std::bit_cast<uint_t>(hwf);
-#else
-            memcpy(this, &hwf, sizeof(float));
-#endif
+            *this = details::bit_cast<floatbase_t>(hwf);
         }
         else if constexpr (format == fp_format::binary64)
         {
@@ -155,11 +185,7 @@ public:
         }
         else if constexpr (format == fp_format::binary64)
         {
-#if BIT_CAST_EXISTS
-            *this = std::bit_cast<uint_t>(hwf);
-#else
-            memcpy(this, &hwf, sizeof(double));
-#endif
+            *this = details::bit_cast<floatbase_t>(hwf);
         }
         else
         {
@@ -248,7 +274,7 @@ private:
 
 #if defined(EMULATE_INTEL)
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-    constexpr integral_t intel_bad_value()
+    constexpr integral_t intel_bad_value() const
     {
         if constexpr (sizeof(integral_t) < sizeof(int))
             return 0;
@@ -262,7 +288,7 @@ private:
 public:
 
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-    explicit operator integral_t()
+    explicit constexpr operator integral_t() const
     {
         using intermediate_t = details::selector_t<(sizeof(int_t) > sizeof(integral_t)), int_t, std::make_signed_t<integral_t>>;
 
@@ -333,40 +359,36 @@ public:
 
 public:
 
-    explicit operator float()
+    explicit constexpr operator float() const
     {
         if constexpr (format == fp_format::binary32)
         {
-            float hwf;
-            memcpy(&hwf, this, sizeof(float));
-            return hwf;
+            return details::bit_cast<float>(*this);
         }
         else
         {
-            return float(float32_t(*this));
+            return static_cast<float>(static_cast<float32_t>(*this));
         }
     }
 
-    explicit operator double()
+    explicit constexpr operator double() const
     {
         if constexpr (format == fp_format::binary64)
         {
-            double hwf;
-            memcpy(&hwf, this, sizeof(double));
-            return hwf;
+            return details::bit_cast<double>(*this);
         }
         else
         {
-            return double(float64_t(*this));
+            return static_cast<double>(static_cast<float64_t>(*this));
         }
     }
 
-    template<typename T> typename T::uint_t widen_significand(uint_t significand) {
+    template<typename T> typename T::uint_t constexpr widen_significand(uint_t significand) const {
         T::uint_t wide_significand = significand;
         return wide_significand << (T::significand_bitsize - significand_bitsize);
     }
 
-    template<typename widefp_t> widefp_t to_widefp()
+    template<typename widefp_t> constexpr widefp_t to_widefp() const
     {
         constexpr int significand_bitdiff = widefp_t::significand_bitsize - significand_bitsize;
 
@@ -408,7 +430,7 @@ public:
         return widefp_t{ sign, exponent, wide_significand };
     }
 
-    template<typename narrowfp_t> narrowfp_t to_narrowfp()
+    template<typename narrowfp_t> constexpr narrowfp_t to_narrowfp() const
     {
         constexpr int significand_bitdiff = significand_bitsize - narrowfp_t::significand_bitsize;
         constexpr uint_t mask = (uint_t(1) << significand_bitdiff) - 1;
@@ -464,7 +486,7 @@ public:
         return narrowfp_t::normal(sign, exponent, narrow_significand);
     }
 
-    explicit operator floatbase_t<fp_format::binary16>()
+    explicit constexpr operator floatbase_t<fp_format::binary16>() const
     {
         static_assert(format != fp_format::binary16, "convert from T to T is impossible");
 
@@ -482,7 +504,7 @@ public:
         }
     }
 
-    explicit operator floatbase_t<fp_format::binary32>()
+    explicit constexpr operator floatbase_t<fp_format::binary32>() const
     {
         static_assert(format != fp_format::binary32, "convert from T to T is impossible");
 
@@ -503,7 +525,7 @@ public:
         }
     }
 
-    explicit operator floatbase_t<fp_format::binary64>()
+    explicit constexpr operator floatbase_t<fp_format::binary64>() const
     {
         static_assert(format != fp_format::binary64, "convert from T to T is impossible");
 
@@ -524,7 +546,7 @@ public:
     }
 
 #if 0
-    explicit operator floatbase_t<fp_format::binary128>()
+    explicit constexpr operator floatbase_t<fp_format::binary128>() const
     {
         static_assert(format != fp_format::binary128, "convert from T to T is impossible");
 
@@ -539,7 +561,7 @@ public:
 
 public:
 
-    std::string to_triplet_string()
+    std::string to_triplet_string() const
     {
         fp_components x = decompose();
         std::stringstream ss;
@@ -547,7 +569,7 @@ public:
         return ss.str();
     }
 
-    std::string to_hex_string() {
+    std::string to_hex_string() const {
         std::stringstream ss;
         ss << "0x" << std::hex << raw_value;
         return ss.str();
@@ -559,7 +581,7 @@ public:
 
 private:
 
-    static uint_t decrease_significand(uint_t& significand, int amount)
+    static constexpr uint_t decrease_significand(uint_t& significand, int amount)
     {
         auto shiftout_bits = significand;
 
@@ -585,7 +607,7 @@ private:
 
     // round significand appropriately
 
-    static void round_significand_core(uint_t &significand, uint_t roundoff_bits)
+    static constexpr void round_significand_core(uint_t &significand, uint_t roundoff_bits)
     {
         constexpr uint_t midpoint = uint_t(1) << (bitsize - 1);
 
@@ -600,7 +622,7 @@ private:
         }
     }
 
-    static bool round_significand(uint_t &significand, exponent_t& exponent, uint_t roundoff_bits)
+    static constexpr bool round_significand(uint_t &significand, exponent_t& exponent, uint_t roundoff_bits)
     {
         assert((significand & ~significand_mask) == (significand_mask+1));
 
@@ -621,7 +643,7 @@ private:
 
     // helper function to round subnormal values. If the value rounds up and becomes
     // normal this function returns `false` to indicate that to the caller
-    static bool round_subnormal_significand(uint_t &significand, uint_t roundoff_bits)
+    static constexpr bool round_subnormal_significand(uint_t &significand, uint_t roundoff_bits)
     {
         assert((significand & ~significand_mask) == 0);
 
@@ -638,12 +660,12 @@ private:
 
     // number of bits significand needs to shift to get implied-one
     // into the right position. Positive means left shift.
-    static int32_t significand_adjustment(uint_t significand)
+    static constexpr int32_t significand_adjustment(uint_t significand)
     {
         // index of the implied leading `1.`
         constexpr unsigned long keybit = significand_bitsize;
 
-        unsigned long index;
+        unsigned long index = 0;
         if (details::bit_scan(&index, significand))
         {
             return keybit - index;
@@ -654,7 +676,7 @@ private:
     }
 
     // increase the exponent value and report if overflow occured
-    static bool increase_exponent(exponent_t& exponent, int amount)
+    static constexpr bool increase_exponent(exponent_t& exponent, int amount)
     {
         exponent += amount;
 
@@ -669,7 +691,7 @@ private:
     // decrease the exponent value and report if underflow occure
     // if return value is non-zero underflow occured--the value
     // returned is the amount of the underflow.
-    static int decrease_exponent(exponent_t& exponent, int amount)
+    static constexpr int decrease_exponent(exponent_t& exponent, int amount)
     {
         exponent -= amount;
 
@@ -697,13 +719,14 @@ private:
         uint_t significand;
     };
 
-    fp_components decompose() const
+    fp_components constexpr decompose() const
     {
-        fp_components components;
-        components.class_ = fp_class::nan;
-        components.sign = raw_value >> (bitsize - 1);
-        components.exponent = (raw_value & ~(uint_t(1) << (bitsize - 1))) >> significand_bitsize;
-        components.significand = (raw_value & ((uint_t(1) << significand_bitsize) - 1));
+        fp_components components{
+            fp_class::nan,
+            static_cast<uint8_t>(raw_value >> (bitsize - 1)),
+            static_cast<exponent_t>((raw_value & ~(uint_t(1) << (bitsize - 1))) >> significand_bitsize),
+            static_cast<uint_t>(raw_value & ((uint_t(1) << significand_bitsize) - 1)),
+        };
 
         if (components.exponent == 0)
         {
@@ -768,7 +791,7 @@ public:
 
 public:
 
-    floatbase_t operator+(floatbase_t addend) const
+    floatbase_t constexpr operator+(floatbase_t addend) const
     {
         fp_components l = this->decompose();
         fp_components r = addend.decompose();
@@ -925,7 +948,7 @@ public:
         return normal(sign, exponent, significand);
     }
 
-    floatbase_t operator-(floatbase_t addend) const
+    floatbase_t constexpr operator-(floatbase_t addend) const
     {
         // TODO: optimize this to avoid calling decompose here and then again in operator+
         fp_components l = this->decompose();
@@ -941,7 +964,7 @@ public:
         return this->operator+(-addend);
     }
 
-    floatbase_t operator*(floatbase_t addend) const
+    floatbase_t constexpr operator*(floatbase_t addend) const
     {
         fp_components l = this->decompose();
         fp_components r = addend.decompose();
@@ -1095,7 +1118,7 @@ public:
         return normal(sign, exponent, significand);
     }
 
-    static void long_division(int_t dividend, int_t divisor, uint_t& quotient, uint_t& remainder)
+    static constexpr void long_division(int_t dividend, int_t divisor, uint_t& quotient, uint_t& remainder)
     {
         quotient = long_division_loop(dividend, divisor);
         remainder = long_division_loop(dividend, divisor);
@@ -1109,7 +1132,7 @@ public:
     }
 
     // compute binary long division
-    static uint_t long_division_loop(int_t& dividend, int_t divisor)
+    static constexpr uint_t long_division_loop(int_t& dividend, int_t divisor)
     {
         int_t quotient = 0;
 
@@ -1126,7 +1149,7 @@ public:
         return static_cast<uint_t>(quotient);
     }
 
-    floatbase_t operator/(floatbase_t denomenator) const
+    floatbase_t constexpr operator/(floatbase_t denomenator) const
     {
         fp_components l = this->decompose();
         fp_components r = denomenator.decompose();
@@ -1185,7 +1208,7 @@ public:
             --exponent; // underflow okay, handled later
         }
 
-        uint_t significand, roundoff_bits;
+        uint_t significand = 0, roundoff_bits = 0;
         long_division(dividend, divisor, significand, roundoff_bits);
 
         if (significand < (significand_mask + 1))
@@ -1221,7 +1244,7 @@ public:
         return normal(sign, exponent, significand);
     }
 
-    floatbase_t operator-() const
+    floatbase_t constexpr operator-() const
     {
         floatbase_t neg = *this;
         neg.raw_value ^= (uint_t(1) << (bitsize - 1));
@@ -1366,8 +1389,8 @@ public:
     // publicly expose private constructors as factory functions. This is done
     // to keep floatbase_t interface similar to built-in float/double while
     // still allowing easy creation from integer values.
-    static floatbase_t from_bitstring(uint_t t) { auto f = floatbase_t{}; f.raw_value = t; return f; }
-    static floatbase_t from_triplet(bool sign, exponent_t exponent, uint_t significand) {
+    static constexpr floatbase_t from_bitstring(uint_t t) { auto f = floatbase_t{}; f.raw_value = t; return f; }
+    static constexpr floatbase_t from_triplet(bool sign, exponent_t exponent, uint_t significand) {
         return floatbase_t{ static_cast<uint_t>(sign), exponent, significand };
     }
 };
