@@ -14,11 +14,43 @@
 // define software implementation of integral typess
 namespace details
 {
+
 template<size_t byte_size> struct int_traits { };
 template<> struct int_traits<16> { using halfint_t = uint64_t; };
 template<> struct int_traits<8> { using halfint_t = uint32_t; };
 template<> struct int_traits<4> { using halfint_t = uint16_t; };
 template<> struct int_traits<2> { using halfint_t = uint8_t; };
+
+template<typename uint_t, typename = std::enable_if_t<std::is_integral_v<uint_t> && std::is_unsigned_v<uint_t>>>
+constexpr uint_t add_carry(uint_t a, uint_t b, uint_t &carry) {
+    if constexpr (sizeof(uint_t) == sizeof(uint8_t)) {
+        uint_t sum;
+        carry = _addcarry_u8(0, a, b, &sum);
+        return sum;
+    }
+    else if constexpr (sizeof(uint_t) == sizeof(uint16_t)) {
+        uint_t sum;
+        carry = _addcarry_u16(0, a, b, &sum);
+        return sum;
+    }
+    else if constexpr (sizeof(uint_t) == sizeof(uint32_t)) {
+        uint_t sum;
+        carry = _addcarry_u32(0, a, b, &sum);
+        return sum;
+    }
+    else if constexpr ((sizeof(uint_t) == sizeof(uint64_t)) && (sizeof(void*) == 8)) {
+        uint_t sum;
+        carry = _addcarry_u64(0, a, b, &sum);
+        return sum;
+    }
+    else
+    {
+        uint_t sum = a + b;
+        carry = (sum < a) ? 1 : 0;
+        return sum;
+    }
+}
+
 }
 
 
@@ -37,7 +69,7 @@ private:
     halfint_t lower_half;
     halfint_t upper_half;
 
-    constexpr intbase_t(halfint_t lower_half, halfint_t upper_half) : lower_half(lower_half), upper_half(upper_half) {
+    constexpr intbase_t(halfint_t upper_half, halfint_t lower_half) : lower_half(lower_half), upper_half(upper_half) {
 
     }
 
@@ -95,16 +127,17 @@ public:
 
 public:
 
+    constexpr intbase_t operator+(intbase_t other) const
+    {
+        uint8_t carry;
+        halfint_t lower_sum = details::add_carry(this->lower_half, other.lower_half, carry);
+        return intbase_t(this->upper_half + other.upper_half + carry, lower_sum);
+    }
+
     constexpr intbase_t operator-(intbase_t other) const
     {
         // todo: handle borrowing
         return intbase_t(this->upper_half - other.upper_half, this->lower_half - other.lower_half);
-    }
-
-    constexpr intbase_t operator+(intbase_t other) const
-    {
-        // todo: handle carry
-        return intbase_t(this->upper_half + other.upper_half, this->lower_half + other.lower_half);
     }
 
     constexpr intbase_t operator*(intbase_t other) const
