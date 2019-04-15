@@ -46,7 +46,7 @@ public:
     intbase_t() = default;
 
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-    constexpr intbase_t(integral_t val) {
+    constexpr intbase_t(integral_t val) : upper_half(0), lower_half(0) {
         if constexpr (sizeof(integral_t) == sizeof(intbase_t))
         {
             *this = details::bit_cast<intbase_t>(val);
