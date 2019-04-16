@@ -87,7 +87,7 @@ namespace details {
                     return false;
                 bitfound = true;
             }
-            return bitfound;
         }
+        return bitfound;
     }
 }

@@ -51,6 +51,36 @@ constexpr uint_t add_carry(uint_t a, uint_t b, uint_t &carry) {
     }
 }
 
+template<typename uint_t, typename = std::enable_if_t<std::is_integral_v<uint_t> && std::is_unsigned_v<uint_t>>>
+constexpr uint_t sub_borrow(uint_t a, uint_t b, uint_t &borrow) {
+    if constexpr (sizeof(uint_t) == sizeof(uint8_t)) {
+        uint_t diff;
+        borrow = _subborrow_u8(0, a, b, &diff);
+        return diff;
+    }
+    else if constexpr (sizeof(uint_t) == sizeof(uint16_t)) {
+        uint_t diff;
+        borrow = _subborrow_u16(0, a, b, &diff);
+        return diff;
+    }
+    else if constexpr (sizeof(uint_t) == sizeof(uint32_t)) {
+        uint_t diff;
+        borrow = _subborrow_u32(0, a, b, &diff);
+        return diff;
+    }
+    else if constexpr ((sizeof(uint_t) == sizeof(uint64_t)) && (sizeof(void*) == 8)) {
+        uint_t diff;
+        borrow = _subborrow_u64(0, a, b, &diff);
+        return diff;
+    }
+    else
+    {
+        uint_t diff = a - b;
+        borrow = (diff > a) ? 1 : 0;
+        return diff;
+    }
+}
+
 }
 
 
@@ -58,7 +88,7 @@ template<size_t byte_size, bool is_signed>
 class intbase_t
 {
     static_assert(byte_size > 1, "expecting 2 bytes or more");
-//    static_assert(is_pow_2(byte_size), "expecting power of 2");
+    static_assert(details::is_pow_2(byte_size), "expecting power of 2");
 
 private:
     using halfint_t = typename details::int_traits<byte_size>::halfint_t;
@@ -136,8 +166,9 @@ public:
 
     constexpr intbase_t operator-(intbase_t other) const
     {
-        // todo: handle borrowing
-        return intbase_t(this->upper_half - other.upper_half, this->lower_half - other.lower_half);
+        uint8_t borrow;
+        halfint_t lower_diff = details::sub_borrow(this->lower_half, other.lower_half, borrow);
+        return intbase_t(this->upper_half - other.upper_half - borrow, lower_diff);
     }
 
     constexpr intbase_t operator*(intbase_t other) const
