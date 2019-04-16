@@ -81,6 +81,34 @@ constexpr uint_t sub_borrow(uint_t a, uint_t b, uint_t &borrow) {
     }
 }
 
+template<typename uint_t, typename = std::enable_if_t<std::is_integral_v<uint_t> && std::is_unsigned_v<uint_t>>>
+constexpr uint_t mul_extended(uint_t a, uint_t b, uint_t &upper) {
+
+    using mask_t = details::selector_t<(sizeof(uint_t) < sizeof(int)), int, int64_t>;
+
+    constexpr int bitsize = sizeof(uint_t) * 8;
+    constexpr mask_t lower_mask = (mask_t(1) << bitsize) - 1;
+    constexpr mask_t upper_mask = lower_mask << bitsize;
+
+    if constexpr (sizeof(uint_t) < sizeof(uint32_t)) {
+        int full = a * b;
+        upper = (full & upper_mask) >> bitsize;
+        return full & lower_mask;
+    }
+    else if constexpr (sizeof(uint_t) == sizeof(uint32_t)) {
+        int64_t full = __emulu(a, b);
+        upper = (full & upper_mask) >> bitsize;
+        return full & lower_mask;
+    }
+    else if constexpr (sizeof(uint_t) == sizeof(uint64_t)) {
+        return _mul128(a, b, &upper);
+    }
+    else
+    {
+        static_assert("extended multiply not implemented for this size/arch");
+    }
+}
+
 }
 
 
@@ -173,8 +201,10 @@ public:
 
     constexpr intbase_t operator*(intbase_t other) const
     {
-        // todo: handle carry
-        return intbase_t(this->upper_half * other.upper_half, this->lower_half * other.lower_half);
+        halfint_t carry, ll = details::mul_extended(this->lower_half, other.lower_half, carry);
+        halfint_t lu = this->lower_half * other.upper_half;
+        halfint_t ul = this->upper_half * other.lower_half;
+        return intbase_t(lu + ul + carry, ll);
     }
 
     constexpr intbase_t operator/(intbase_t other) const
