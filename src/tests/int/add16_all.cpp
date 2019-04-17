@@ -36,9 +36,11 @@ void validate_add(uint16_t x, uint16_t y)
     {
         int16sw_t a = static_cast<int16sw_t>(x);
         int16sw_t b = static_cast<int16sw_t>(y);
+        int16_t sx = static_cast<int16sw_t>(x);
+        int16_t sy = static_cast<int16sw_t>(y);
 
         int16sw_t c = a + b;
-        int16_t z = x + y;
+        int16_t z = sx + sy;
 
         if (memcmp(&c, &z, sizeof(uint16_t))) {
             cout << std::hex << "hw: x=0x" << x << " y=0x" << y << " z=0x" << z << endl;

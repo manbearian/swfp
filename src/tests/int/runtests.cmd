@@ -2,9 +2,11 @@
 @for %%x in (
 
   basic_init.cpp
+
   add16_all.cpp
   sub16_all.cpp
   mul16_all.cpp
+  div16_all.cpp
 
 ) do @(
  pushd %tmp%
