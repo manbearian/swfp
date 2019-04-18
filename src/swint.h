@@ -118,8 +118,13 @@ class intbase_t
     static_assert(byte_size > 1, "expecting 2 bytes or more");
     static_assert(details::is_pow_2(byte_size), "expecting power of 2");
 
+public:
+
+    static constexpr bool is_signed = is_signed;
+
 private:
     using halfint_t = typename details::int_traits<byte_size>::halfint_t;
+    static constexpr size_t bitsize = byte_size * 8;
     static constexpr size_t half_bitsize = sizeof(halfint_t) * 8;
     static constexpr halfint_t topbit_mask = halfint_t(1) << (half_bitsize - 1);
     static constexpr halfint_t allones_mask = static_cast<halfint_t>(~0);
@@ -174,8 +179,20 @@ public:
         else if constexpr (sizeof(integral_t) <= sizeof(halfint_t)) {
             return static_cast<integral_t>(lower_half);
         }
-        else {
-            return (static_cast<integral_t>(upper_half) << half_bitsize) | static_cast<integral_t>(lower_half);
+        else
+        {
+            integral_t value = (static_cast<integral_t>(upper_half) << half_bitsize) | static_cast<integral_t>(lower_half);
+
+            constexpr integral_t bitdiff = (sizeof(integral_t) * 8) - bitsize;
+            if constexpr (is_signed && (bitdiff > 0)) {
+                if (upper_half & topbit_mask) {
+                    // sign extend...
+                    constexpr integral_t signext_mask = ((integral_t(1) << bitdiff) - 1) << bitsize;
+                    value |= signext_mask;
+                }
+            }
+
+            return value;
         }
     }
 
@@ -328,16 +345,16 @@ public:
     constexpr bool operator!=(intbase_t other) const { return !this->operator==(other); }
 
     constexpr bool operator<(intbase_t other) const {
-        if (this->upper_half < other.lower_half)
+        if (this->upper_half < other.upper_half)
             return true;
-        if (this->upper_half > other.lower_half)
+        if (this->upper_half > other.upper_half)
             return false;
         return this->lower_half < other.lower_half; 
     }
     constexpr bool operator<=(intbase_t other) const {
-        if (this->upper_half < other.lower_half)
+        if (this->upper_half < other.upper_half)
             return true;
-        if (this->upper_half > other.lower_half)
+        if (this->upper_half > other.upper_half)
             return false;
         return this->lower_half <= other.lower_half;
     }
