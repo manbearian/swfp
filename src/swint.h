@@ -226,8 +226,34 @@ public:
 
     constexpr intbase_t operator/(intbase_t other) const
     {
-        // todo: handle carry
-        return intbase_t(this->upper_half / other.upper_half, this->lower_half / other.lower_half);
+        intbase_t dividend = *this;
+        intbase_t divisor = other;
+
+        int qsign = 0;
+        if constexpr (is_signed) {
+            if (dividend.upper_half & topbit_mask) {
+                qsign ^= 1;
+                dividend = -dividend;
+            }
+            if (divisor.upper_half & topbit_mask) {
+                qsign ^= 1;
+                divisor = -divisor;
+            }
+        }
+
+        // implment via repeated subtraction
+        // todo: optimize this
+        intbase_t quot = 0;
+        while (dividend >= divisor) {
+            dividend -= divisor;
+            ++quot;
+        }
+        
+        if (qsign) {
+            quot = -quot;
+        }
+
+        return quot;
     }
 
     constexpr intbase_t operator%(intbase_t other) const
