@@ -236,6 +236,14 @@ public:
         return intbase_t(this->upper_half % other.upper_half, this->lower_half % other.lower_half);
     }
 
+    constexpr intbase_t operator-() const
+    {
+        halfint_t l = -this->lower_half;
+        halfint_t h = -this->upper_half;
+        h -= (l != 0) ? 1 : 0;
+        return intbase_t(h, l);
+    }
+
     //
     // increment
     //
