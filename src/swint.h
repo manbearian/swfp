@@ -127,7 +127,7 @@ private:
     static constexpr size_t bitsize = byte_size * 8;
     static constexpr size_t half_bitsize = sizeof(halfint_t) * 8;
     static constexpr halfint_t topbit_mask = halfint_t(1) << (half_bitsize - 1);
-    static constexpr halfint_t allones_mask = static_cast<halfint_t>(~0);
+    static constexpr halfint_t allones_mask = static_cast<halfint_t>(~halfint_t(0));
 
     halfint_t lower_half;
     halfint_t upper_half;
@@ -241,12 +241,18 @@ public:
             }
         }
 
-        // implment via repeated subtraction
-        // todo: optimize this
         intbase_t quot = 0;
-        while (dividend >= divisor) {
-            dividend -= divisor;
-            ++quot;
+
+        if (other.upper_half == 0 && this->upper_half == 0) {
+            quot.lower_half = this->lower_half / other.lower_half;
+        }
+        else {
+            // implment via repeated subtraction
+            // todo: optimize this
+            while (dividend >= divisor) {
+                dividend -= divisor;
+                ++quot;
+            }
         }
         
         if (qsign) {
@@ -342,14 +348,42 @@ public:
 
     constexpr intbase_t operator<<(int amount) const
     {
-        // todo: handle wrap
-        return intbase_t(this->upper_half << amount, this->lower_half << amount);
+        halfint_t h = this->upper_half;
+        halfint_t l = this->lower_half;
+
+        if (amount >= half_bitsize) {
+            amount -= half_bitsize;
+            return intbase_t(l << amount, 0);
+        }
+
+        h <<= amount;
+        h |= l >> (half_bitsize - amount);
+        l <<= amount;
+        return intbase_t(h, l);
     }
 
     constexpr intbase_t operator>>(int amount) const
     {
-        // todo: handle wrap
-        return intbase_t(this->upper_half >> amount, this->lower_half >> amount);
+        halfint_t mask = ((halfint_t(1) << amount) - 1);
+
+        details::selector_t<is_signed, details::make_signed_t<halfint_t>, halfint_t> h = this->upper_half;
+        halfint_t l = this->lower_half;
+
+        if (amount >= half_bitsize) {
+            amount -= half_bitsize;
+            if constexpr (is_signed) {
+                if (h & topbit_mask) {
+                    return intbase_t(allones_mask, h >> amount);
+                }
+            }
+            return intbase_t(0, h >> amount);
+        }
+
+        l >>= amount;
+        l |= (h & mask) << (half_bitsize - amount);
+        h >>= amount;
+
+        return intbase_t(h, l);
     }
 
 

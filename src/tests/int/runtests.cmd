@@ -4,6 +4,8 @@
   basic_init.cpp
 
   neg16_all.cpp
+  shift16_all.cpp
+
   add16_all.cpp
   sub16_all.cpp
   mul16_all.cpp
