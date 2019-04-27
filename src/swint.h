@@ -22,86 +22,99 @@ template<> struct int_traits<4> { using halfint_t = uint16_t; };
 template<> struct int_traits<2> { using halfint_t = uint8_t; };
 
 template<typename uint_t, typename = std::enable_if_t<std::is_integral_v<uint_t> && std::is_unsigned_v<uint_t>>>
-constexpr uint_t add_carry(uint_t a, uint_t b, uint_t &carry) {
+constexpr uint_t add_carry(uint_t a, uint_t b, uint8_t &carry)
+{
     if constexpr (sizeof(uint_t) == sizeof(uint8_t)) {
         uint_t sum;
-        carry = _addcarry_u8(0, a, b, &sum);
+        carry = _addcarry_u8(carry, a, b, &sum);
         return sum;
     }
     else if constexpr (sizeof(uint_t) == sizeof(uint16_t)) {
         uint_t sum;
-        carry = _addcarry_u16(0, a, b, &sum);
+        carry = _addcarry_u16(carry, a, b, &sum);
         return sum;
     }
     else if constexpr (sizeof(uint_t) == sizeof(uint32_t)) {
         uint_t sum;
-        carry = _addcarry_u32(0, a, b, &sum);
+        carry = _addcarry_u32(carry, a, b, &sum);
         return sum;
     }
     else if constexpr ((sizeof(uint_t) == sizeof(uint64_t)) && (sizeof(void*) == 8)) {
         uint_t sum;
-        carry = _addcarry_u64(0, a, b, &sum);
+        carry = _addcarry_u64(carry, a, b, &sum);
         return sum;
     }
     else
     {
-        uint_t sum = a + b;
-        carry = (sum < a) ? 1 : 0;
-        return sum;
+        static_assert("larger add_carry not implemented");
     }
 }
 
 template<typename uint_t, typename = std::enable_if_t<std::is_integral_v<uint_t> && std::is_unsigned_v<uint_t>>>
-constexpr uint_t sub_borrow(uint_t a, uint_t b, uint_t &borrow) {
-    if constexpr (sizeof(uint_t) == sizeof(uint8_t)) {
+constexpr uint_t sub_borrow_slow(uint_t a, uint_t b, uint8_t &borrow) {
+    uint_t diff = a - b;
+    diff -= borrow;
+    borrow = (b > a) || ((b == a) && borrow);
+    return diff;
+}
+
+template<typename uint_t, typename = std::enable_if_t<std::is_integral_v<uint_t> && std::is_unsigned_v<uint_t>>>
+constexpr uint_t sub_borrow(uint_t a, uint_t b, uint8_t &borrow)
+{
+    if (details::is_constant_evaluated())
+    {
+        return sub_borrow_slow(a, b, borrow);
+    }
+    else if constexpr (sizeof(uint_t) == sizeof(uint8_t)) {
         uint_t diff;
-        borrow = _subborrow_u8(0, a, b, &diff);
+        borrow = _subborrow_u8(borrow, a, b, &diff);
         return diff;
     }
     else if constexpr (sizeof(uint_t) == sizeof(uint16_t)) {
         uint_t diff;
-        borrow = _subborrow_u16(0, a, b, &diff);
+        borrow = _subborrow_u16(borrow, a, b, &diff);
         return diff;
     }
     else if constexpr (sizeof(uint_t) == sizeof(uint32_t)) {
         uint_t diff;
-        borrow = _subborrow_u32(0, a, b, &diff);
+        borrow = _subborrow_u32(borrow, a, b, &diff);
         return diff;
     }
     else if constexpr ((sizeof(uint_t) == sizeof(uint64_t)) && (sizeof(void*) == 8)) {
         uint_t diff;
-        borrow = _subborrow_u64(0, a, b, &diff);
+        borrow = _subborrow_u64(borrow, a, b, &diff);
         return diff;
     }
-    else
-    {
-        uint_t diff = a - b;
-        borrow = (diff > a) ? 1 : 0;
-        return diff;
+    else {
+        return sub_borrow_slow(a, b, borrow);
     }
 }
 
 template<typename uint_t, typename = std::enable_if_t<std::is_integral_v<uint_t> && std::is_unsigned_v<uint_t>>>
-constexpr uint_t mul_extended(uint_t a, uint_t b, uint_t &upper) {
-
+constexpr uint_t mul_extended(uint_t a, uint_t b, uint_t &upper)
+{
     using mask_t = details::selector_t<(sizeof(uint_t) < sizeof(int)), int, int64_t>;
 
-    constexpr int bitsize = sizeof(uint_t) * 8;
-    constexpr mask_t lower_mask = (mask_t(1) << bitsize) - 1;
-    constexpr mask_t upper_mask = lower_mask << bitsize;
+    if constexpr (sizeof(uint_t) <= sizeof(uint32_t))
+    {
+        constexpr int bitsize = sizeof(uint_t) * 8;
+        constexpr mask_t lower_mask = (mask_t(1) << bitsize) - 1;
+        constexpr mask_t upper_mask = lower_mask << bitsize;
 
-    if constexpr (sizeof(uint_t) < sizeof(uint32_t)) {
-        int full = a * b;
-        upper = (full & upper_mask) >> bitsize;
-        return full & lower_mask;
+        if constexpr (sizeof(uint_t) < sizeof(uint32_t)) {
+            int full = a * b;
+            upper = (full & upper_mask) >> bitsize;
+            return full & lower_mask;
+        }
+        else if constexpr (sizeof(uint_t) == sizeof(uint32_t)) {
+            int64_t full = __emulu(a, b);
+            upper = (full & upper_mask) >> bitsize;
+            return full & lower_mask;
+        }
     }
-    else if constexpr (sizeof(uint_t) == sizeof(uint32_t)) {
-        int64_t full = __emulu(a, b);
-        upper = (full & upper_mask) >> bitsize;
-        return full & lower_mask;
-    }
-    else if constexpr (sizeof(uint_t) == sizeof(uint64_t)) {
-        return _mul128(a, b, &upper);
+    else if constexpr (sizeof(uint_t) == sizeof(uint64_t))
+    {
+        return _umul128(a, b, &upper);
     }
     else
     {
@@ -196,6 +209,10 @@ public:
         }
     }
 
+    constexpr operator bool() const {
+        return this->lower_half != 0 || this->upper_half != 0;
+    }
+
     //
     // arithmetic
     //
@@ -204,21 +221,21 @@ public:
 
     constexpr intbase_t operator+(intbase_t other) const
     {
-        uint8_t carry;
+        uint8_t carry = 0;
         halfint_t lower_sum = details::add_carry(this->lower_half, other.lower_half, carry);
         return intbase_t(this->upper_half + other.upper_half + carry, lower_sum);
     }
 
     constexpr intbase_t operator-(intbase_t other) const
     {
-        uint8_t borrow;
+        uint8_t borrow = 0 ;
         halfint_t lower_diff = details::sub_borrow(this->lower_half, other.lower_half, borrow);
         return intbase_t(this->upper_half - other.upper_half - borrow, lower_diff);
     }
 
     constexpr intbase_t operator*(intbase_t other) const
     {
-        halfint_t carry, ll = details::mul_extended(this->lower_half, other.lower_half, carry);
+        halfint_t carry = 0, ll = details::mul_extended(this->lower_half, other.lower_half, carry);
         halfint_t lu = this->lower_half * other.upper_half;
         halfint_t ul = this->upper_half * other.lower_half;
         return intbase_t(lu + ul + carry, ll);
@@ -247,7 +264,7 @@ public:
             quot.lower_half = this->lower_half / other.lower_half;
         }
         else {
-            // implment via repeated subtraction
+            // implement via repeated subtraction
             // todo: optimize this
             while (dividend >= divisor) {
                 dividend -= divisor;
@@ -434,14 +451,117 @@ public:
     //
     // misc operations
     //
-public:
-    constexpr bool reverse_bit_scan(unsigned long *index) {
-        if (details::reverse_bit_scan(index, upper_half)) {
-            return index + sizeof(halfint_t);
+ 
+    static constexpr bool reverse_bit_scan(unsigned long *index, intbase_t value)
+    {
+        if constexpr (std::is_integral_v<halfint_t>) {
+            if (details::reverse_bit_scan(index, value.upper_half)) {
+                return index + sizeof(halfint_t);
+            }
+            return details::reverse_bit_scan(index, value.lower_half);
+        } else {
+            if (halfint_t::reverse_bit_scan(index, value.upper_half)) {
+                return index + sizeof(halfint_t);
+            }
+            return halfint_t::reverse_bit_scan(index, value.lower_half);
         }
-        return details::reverse_bit_scan(index, lower_half);
+    }
+
+    static constexpr intbase_t add_carry(intbase_t a, intbase_t b, uint8_t &carry)
+    {
+        if constexpr (std::is_integral_v<halfint_t>) {
+            halfint_t lower_sum = details::add_carry(a.lower_half, b.lower_half, carry);
+            halfint_t upper_sum = details::add_carry(a.upper_half, b.upper_half, carry);
+            return intbase_t(upper_sum, lower_sum);
+        } else {
+            halfint_t lower_sum = halfint_t::add_carry(a.lower_half, b.lower_half, carry);
+            halfint_t upper_sum = halfint_t::add_carry(a.upper_half, b.upper_half, carry);
+            return intbase_t(upper_sum, lower_sum);
+        }
+    }
+
+    static constexpr intbase_t sub_borrow(intbase_t a, intbase_t b, uint8_t &borrow)
+    {
+        if constexpr (std::is_integral_v<halfint_t>) {
+            halfint_t lower_diff = details::sub_borrow(a.lower_half, b.lower_half, borrow);
+            halfint_t upper_diff = details::sub_borrow(a.upper_half, b.upper_half, borrow);
+            return intbase_t(upper_diff, lower_diff);
+        } else {
+            halfint_t lower_diff = halfint_t::sub_borrow(a.lower_half, b.lower_half, borrow);
+            halfint_t upper_diff = halfint_t::sub_borrow(a.upper_half, b.upper_half, borrow);
+            return intbase_t(upper_diff, lower_diff);
+        }
+    }
+
+    static constexpr intbase_t multiply_extended(intbase_t a, intbase_t b, intbase_t &prod_hi)
+    {
+        int qsign = 0;
+
+        if constexpr (is_signed) {
+            if (a.upper_half & topbit_mask) {
+                qsign ^= 1;
+                a = -a;
+            }
+            if (b.upper_half & topbit_mask) {
+                qsign ^= 1;
+                b = -b;
+            }
+        }
+
+        // we cannot use operator* because we need to compute the top-bits of
+        // the multiply, so re-implement it here with that functionality.
+
+        // use FOIL method (first-inside-outside-last)
+        //   F -> lower-bits of upper-product, throw away overflow when computing this
+        //   O -> upper-bits of lower-product, overflow goes to lower-bits of upper-product
+        //   I -> upper-bits of lower-product, overflow goes to lower-bits of upper-product
+        //   L -> lower-bits of lower-product, overflow goes to upper-bits of lower-product
+        halfint_t carry_ll = 0, ll;
+        halfint_t carry_lu = 0, lu;
+        halfint_t carry_ul = 0, ul;
+        halfint_t carry_uu = 0, uu;
+        if constexpr (std::is_integral_v<halfint_t>) {
+           ll = details::mul_extended(a.lower_half, b.lower_half, carry_ll);
+           lu = details::mul_extended(a.lower_half, b.upper_half, carry_lu);
+           ul = details::mul_extended(a.upper_half, b.lower_half, carry_ul);
+           uu = details::mul_extended(a.upper_half, b.upper_half, carry_uu);
+        }
+        else {
+           ll = halfint_t::multiply_extended(a.lower_half, b.lower_half, carry_ll);
+           lu = halfint_t::multiply_extended(a.lower_half, b.upper_half, carry_lu);
+           ul = halfint_t::multiply_extended(a.upper_half, b.lower_half, carry_ul);
+           uu = halfint_t::multiply_extended(a.upper_half, b.upper_half, carry_uu);
+        }
+
+        uint8_t carry1 = 0;
+        uint8_t carry2 = 0;
+
+        auto prod_lo = intbase_t(carry_ll, ll);
+        prod_lo = add_carry(prod_lo, intbase_t(lu, 0), carry1);
+        prod_lo = add_carry(prod_lo, intbase_t(ul, 0), carry2);
+
+        prod_hi = intbase_t(carry_uu, uu);
+        prod_hi += intbase_t(0, carry_lu);
+        prod_hi += intbase_t(0, carry_ul);
+        prod_hi += intbase_t(0, carry1 + carry2);
+
+        if constexpr (is_signed) {
+            if (qsign) {
+                prod_lo = -prod_lo;
+                prod_hi = -prod_hi;
+                if (prod_lo) {
+                    --prod_hi;
+                }
+            }
+        }
+        else {
+            (qsign);
+        }
+
+        return prod_lo;
     }
 };
+
 
 using int128sw_t = intbase_t<16, true>;
 using uint128sw_t = intbase_t<16, false>;
@@ -451,6 +571,8 @@ using int32sw_t = intbase_t<4, true>;
 using uint32sw_t = intbase_t<4, false>;
 using int16sw_t = intbase_t<2, true>;
 using uint16sw_t = intbase_t<2, false>;
+
+
 
 #if USE_SW_INT128 // detect existence of HW 128-bit integer types
 
@@ -501,7 +623,7 @@ namespace details
     using make_signed_t = typename details::make_signed<T>::type;
 
     static constexpr bool reverse_bit_scan(unsigned long *index, uint128_t mask) {
-        return mask.reverse_bit_scan(index);
+        return uint128_t::reverse_bit_scan(index, mask);
     }
 }
 

@@ -69,8 +69,6 @@ int main()
                 std::terminate();
             }
         });
-
-        cout << "\n";
     }
     catch (std::exception e)
     {

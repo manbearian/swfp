@@ -9,7 +9,7 @@
 
 #include <limits>
 
-#include "swfp.h"
+#include "swint.h"
 
 // disable constant arithmetic warnings
 #pragma warning(disable:4756)

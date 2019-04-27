@@ -11,6 +11,10 @@
   mul16_all.cpp
   div16_all.cpp
 
+  addc16_all.cpp
+  sub16_all.cpp
+  mulext16_all.cpp
+
 ) do @(
  pushd %tmp%
  cl -nologo -EHsc -std:c++17 -Zi -W4 -diagnostics:caret -O2 -DNDEBUG -I%%~px\..\.. %%~fx
