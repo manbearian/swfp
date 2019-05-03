@@ -2,12 +2,13 @@
 setlocal
 
 set single_test=%1
-if defined single_test (
-  call :run_test %single_test%
+for %%f in ( %single_test% 
+) do (
+  call :run_test %%~ff
   if errorlevel 1 goto :fail
+  echo PASS *SINGLE* TEST
   goto :eof
 )
-  
 
 for %%x in (
 
@@ -26,7 +27,7 @@ for %%x in (
   mulext16_all.cpp
 
 ) do (
- call :run_test %%x
+ call :run_test %%~fx
  if errorlevel 1 goto :fail
 )
 echo PASS ALL TESTS
@@ -36,6 +37,7 @@ goto :eof
 :run_test
 :  %1 - name of test
 ::::::::::::::::::::::::::::::::::::
+ pushd %tmp%
  cl -nologo -EHsc -std:c++17 -Zi -W4 -diagnostics:caret -O2 -DNDEBUG -I%~p1\..\.. %~f1
  popd
  if not errorlevel 0 exit /b 1
