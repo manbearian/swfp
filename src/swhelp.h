@@ -22,6 +22,18 @@ namespace details {
     template <typename T, typename U> struct selector<false, T, U> { using type = U; };
     template<bool a, typename T, typename U> using selector_t = typename selector<a, T, U>::type;
 
+    // create integral type of requested size
+    template<size_t byte_size, bool is_signed> struct make_integral { using type = void; };
+    template<> struct make_integral<1, false> { using type = uint8_t; };
+    template<> struct make_integral<2, false> { using type = uint16_t; };
+    template<> struct make_integral<4, false> { using type = uint32_t; };
+    template<> struct make_integral<8, false> { using type = uint64_t; };
+    template<> struct make_integral<1, true> { using type = int8_t; };
+    template<> struct make_integral<2, true> { using type = int16_t; };
+    template<> struct make_integral<4, true> { using type = int32_t; };
+    template<> struct make_integral<8, true> { using type = int64_t; };
+    template<size_t byte_size, bool is_signed> using make_integral_t = typename make_integral<byte_size, is_signed>::type;
+
     // bit_cast operation provided for pre-C++20
 #if BIT_CAST_EXISTS
     using std::bit_cast;

@@ -10,12 +10,14 @@
 #define USE_SW_INT128 1
 #endif
 
+// forward declare
+template<size_t byte_size, bool is_signed> class intbase_t;
 
 // define software implementation of integral typess
 namespace details
 {
 
-template<size_t byte_size> struct int_traits { };
+template<size_t byte_size> struct int_traits { using halfint_t = typename intbase_t<byte_size / 2, false>; };
 template<> struct int_traits<16> { using halfint_t = uint64_t; };
 template<> struct int_traits<8> { using halfint_t = uint32_t; };
 template<> struct int_traits<4> { using halfint_t = uint16_t; };
@@ -46,7 +48,7 @@ constexpr uint_t add_carry(uint_t a, uint_t b, uint8_t &carry)
     }
     else
     {
-        static_assert("larger add_carry not implemented");
+        static_assert(false, "larger add_carry not implemented");
     }
 }
 
@@ -122,6 +124,14 @@ constexpr uint_t mul_extended(uint_t a, uint_t b, uint_t &upper)
     }
 }
 
+#pragma optimize("", off)
+__declspec(noreturn) __declspec(noinline) void divide_by_zero() {
+
+    static volatile int divide_by_zero_global = 0;
+    divide_by_zero_global = 100 / divide_by_zero_global;
+}
+#pragma optimize("", on)
+
 }
 
 
@@ -136,7 +146,14 @@ public:
     static constexpr bool is_signed = is_signed;
 
 private:
+    using signed_t = intbase_t<byte_size, true>;
+    using unsigned_t = intbase_t<byte_size, false>;
     using halfint_t = typename details::int_traits<byte_size>::halfint_t;
+    using shalfint_t = details::selector_t<std::is_integral_v<halfint_t>,
+        std::make_signed_t<halfint_t>,
+        intbase_t<sizeof(halfint_t), true>
+    >;
+
     static constexpr size_t bitsize = byte_size * 8;
     static constexpr size_t half_bitsize = sizeof(halfint_t) * 8;
     static constexpr halfint_t topbit_mask = halfint_t(1) << (half_bitsize - 1);
@@ -154,7 +171,7 @@ public:
     intbase_t() = default;
 
     template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-    constexpr intbase_t(integral_t val) : upper_half(0), lower_half(0) {
+    constexpr explicit intbase_t(integral_t val) : upper_half(0), lower_half(0) {
         if constexpr (sizeof(integral_t) == sizeof(intbase_t))
         {
             *this = details::bit_cast<intbase_t>(val);
@@ -178,15 +195,48 @@ public:
 
 
     //
+    // limits
+    //
+
+public:
+
+    static constexpr intbase_t max() {
+        constexpr halfint_t allones = static_cast<halfint_t>(~halfint_t(0));
+        if constexpr (is_signed) {
+            return intbase_t(allones >> 1, allones);
+        }
+        else {
+            return intbase_t(allones, allones);
+        }
+    }
+
+    static constexpr intbase_t min() {
+        if constexpr (is_signed) {
+            return intbase_t(static_cast<halfint_t>(halfint_t(1) << (half_bitsize - 1)), 0);
+        }
+        else {
+            return intbase_t(0);
+        }
+    }
+
+    //
     // conversion
     //
 
 public:
 
-    template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-    constexpr operator integral_t() const
+    // combine template for both integral and bool to avoid compiler prefering
+    // non-template version over template verion if non-template operator bool.
+    template<typename integral_t,
+        typename = std::enable_if_t<
+            std::is_integral_v<integral_t> || std::is_same_v<integral_t, bool>
+    >>
+    constexpr explicit operator integral_t() const
     {
-        if constexpr (sizeof(integral_t) == sizeof(intbase_t)) {
+        if constexpr (std::is_same_v<integral_t, bool>) {
+            return this->upper_half || this->lower_half;
+        }
+        else if constexpr (sizeof(integral_t) == sizeof(intbase_t)) {
             return details::bit_cast<integral_t>(*this);
         }
         else if constexpr (sizeof(integral_t) <= sizeof(halfint_t)) {
@@ -209,9 +259,6 @@ public:
         }
     }
 
-    constexpr operator bool() const {
-        return this->lower_half != 0 || this->upper_half != 0;
-    }
 
     //
     // arithmetic
@@ -241,10 +288,17 @@ public:
         return intbase_t(lu + ul + carry, ll);
     }
 
-    constexpr intbase_t operator/(intbase_t other) const
+private:
+
+    struct div_t { intbase_t quot; intbase_t rem; };
+    static constexpr div_t div(intbase_t dividend, intbase_t divisor)
     {
-        intbase_t dividend = *this;
-        intbase_t divisor = other;
+        div_t result{};
+
+        if (divisor == intbase_t(0)) {
+            // handle divide-by-zero
+            details::divide_by_zero();
+        }
 
         int qsign = 0;
         if constexpr (is_signed) {
@@ -258,25 +312,69 @@ public:
             }
         }
 
-        intbase_t quot = 0;
-
-        if (other.upper_half == 0 && this->upper_half == 0) {
-            quot.lower_half = this->lower_half / other.lower_half;
+        if (dividend.upper_half == 0 && divisor.upper_half == 0) {
+            result.quot.lower_half = dividend.lower_half / divisor.lower_half;
+            result.rem.lower_half = dividend.lower_half % divisor.lower_half;
         }
         else {
+
+#if 0
+            // Q = N / D, R = remainder
+
+            halfint_t q = halfint_t(0), r = halfint_t(0);
+
+            int bit = bitsize - 1;
+            for (; bit >= bit / 2; --bit)
+            {
+                r <<= 1;
+                r |= (dividend.lower_half & (halfint_t(1) << bit)) >> bit;
+                if (r >= divisor) {
+                    r -= divisor;
+                    q|= (halfint_t(1) << bit);
+                }
+
+            }
+#elif 1
+            int bit = bitsize - 1;
+            for (; bit >= 0; --bit)
+            {
+                result.rem <<= 1;
+                result.rem |= (dividend & (intbase_t(1) << bit)) >> bit;
+                if (result.rem >= divisor) {
+                    result.rem -= divisor;
+                    result.quot |= (intbase_t(1) << bit);
+                }
+            }
+
+#else
             // implement via repeated subtraction
             // todo: optimize this
             while (dividend >= divisor) {
                 dividend -= divisor;
-                ++quot;
+                ++result.quot;
             }
+#endif
         }
         
-        if (qsign) {
-            quot = -quot;
+
+        if constexpr (is_signed) {
+            if (qsign) {
+                result.quot = -result.quot;
+            }
+        }
+        else {
+            (qsign);
         }
 
-        return quot;
+        return result;
+    }
+
+public:
+
+    constexpr intbase_t operator/(intbase_t other) const
+    {
+        auto result = div(*this, other);
+        return result.quot;
     }
 
     constexpr intbase_t operator%(intbase_t other) const
@@ -287,9 +385,9 @@ public:
 
     constexpr intbase_t operator-() const
     {
-        halfint_t l = -this->lower_half;
-        halfint_t h = -this->upper_half;
-        h -= (l != 0) ? 1 : 0;
+        halfint_t l = static_cast<halfint_t>(-static_cast<shalfint_t>(this->lower_half));
+        halfint_t h = static_cast<halfint_t>(-static_cast<shalfint_t>(this->upper_half));
+        h = static_cast<halfint_t>(h - ((l != 0) ? 1 : 0));
         return intbase_t(h, l);
     }
 
@@ -299,20 +397,20 @@ public:
 public:
     constexpr intbase_t operator--() {
         auto t = *this;
-        *this = this->operator-(1);
+        *this = this->operator-(intbase_t(1));
         return t;
     }
     constexpr intbase_t operator--(int) {
-        *this = this->operator-(1);
+        *this = this->operator-(intbase_t(1));
         return *this;
     }
     constexpr intbase_t operator++() {
         auto t = *this;
-        *this = this->operator+(1);
+        *this = this->operator+(intbase_t(1));
         return t;
     }
     constexpr intbase_t operator++(int) {
-        *this = this->operator+(1);
+        *this = this->operator+(intbase_t(1));
         return *this;
     }
 
@@ -331,11 +429,11 @@ public:
         return *this;
     }
     constexpr intbase_t operator*=(intbase_t other) {
-        *this = this->operator-(other);
+        *this = this->operator*(other);
         return *this;
     }
     constexpr intbase_t operator/=(intbase_t other) {
-        *this = this->operator-(other);
+        *this = this->operator/(other);
         return *this;
     }
 
@@ -365,42 +463,98 @@ public:
 
     constexpr intbase_t operator<<(int amount) const
     {
-        halfint_t h = this->upper_half;
-        halfint_t l = this->lower_half;
+        if constexpr (sizeof(intbase_t) <= sizeof(uint64_t))
+        {
+            using inthw_t = details::make_integral_t<byte_size, false>;
+            using shift_type_t = details::selector_t<(byte_size < sizeof(int32_t)), uint32_t, inthw_t>;
 
-        if (amount >= half_bitsize) {
-            amount -= half_bitsize;
-            return intbase_t(l << amount, 0);
+            shift_type_t all = static_cast<inthw_t>(*this);
+            all <<= amount;
+            return static_cast<intbase_t>(all);
         }
+        else if constexpr (sizeof(intbase_t) == 16)
+        {
+            if ((amount & 63) != amount) {
+                return intbase_t(this->lower_half << (amount - 64), 0);
+            }
 
-        h <<= amount;
-        h |= l >> (half_bitsize - amount);
-        l <<= amount;
-        return intbase_t(h, l);
+            intbase_t out;
+            out.lower_half = this->lower_half << amount;
+            out.upper_half = __shiftleft128(this->lower_half, this->upper_half, static_cast<unsigned char>(amount));
+            return out;
+        }
+        else
+        {
+            // geneal purpose left shift
+            // todo: hand optimize for larger shifts as optimzer does a bad job of this
+
+            halfint_t h = this->upper_half;
+            halfint_t l = this->lower_half;
+
+            if (amount >= half_bitsize) {
+                amount -= half_bitsize;
+                return intbase_t(l << amount, 0);
+            }
+
+            h <<= amount;
+            h |= l >> (half_bitsize - amount);
+            l <<= amount;
+            return intbase_t(h, l);
+        }
     }
 
     constexpr intbase_t operator>>(int amount) const
     {
-        halfint_t mask = ((halfint_t(1) << amount) - 1);
+        if constexpr (sizeof(intbase_t) <= sizeof(uint64_t))
+        {
+            using inthw_t = details::make_integral_t<byte_size, is_signed>;
+            using shift_type_t = details::selector_t<(byte_size < sizeof(int32_t)), int32_t, inthw_t>;
 
-        details::selector_t<is_signed, details::make_signed_t<halfint_t>, halfint_t> h = this->upper_half;
-        halfint_t l = this->lower_half;
-
-        if (amount >= half_bitsize) {
-            amount -= half_bitsize;
-            if constexpr (is_signed) {
-                if (h & topbit_mask) {
-                    return intbase_t(allones_mask, h >> amount);
-                }
-            }
-            return intbase_t(0, h >> amount);
+            shift_type_t all = static_cast<inthw_t>(*this);
+            all >>= amount;
+            return static_cast<intbase_t>(all);
         }
+        else if constexpr (sizeof(intbase_t) == 16)
+        {
+            using shift_type_t = details::selector_t<is_signed, shalfint_t, halfint_t>;
+            if ((amount & 63) != amount) {
+                halfint_t top_half = 0;
+                if constexpr (is_signed) {
+                    if (this->upper_half & topbit_mask) {
+                        top_half = allones_mask;
+                    }
+                }
 
-        l >>= amount;
-        l |= (h & mask) << (half_bitsize - amount);
-        h >>= amount;
+                return intbase_t(top_half, static_cast<shift_type_t>(this->upper_half) >> amount);
+            }
 
-        return intbase_t(h, l);
+            intbase_t out;
+            out.upper_half = static_cast<shift_type_t>(this->upper_half) >> amount;
+            out.lower_half = __shiftright128(this->lower_half, this->upper_half, static_cast<unsigned char>(amount));
+            return out;
+        }
+        else {
+            halfint_t mask = ((halfint_t(1) << amount) - 1);
+
+            details::selector_t<is_signed, shalfint_t, halfint_t> h = this->upper_half;
+            halfint_t l = this->lower_half;
+
+            if (amount >= half_bitsize) {
+                amount -= half_bitsize;
+                if constexpr (is_signed) {
+                    if (h & topbit_mask) {
+                        return intbase_t(allones_mask, h >> amount);
+                    }
+                }
+                return intbase_t(0, h >> amount);
+            }
+
+            l >>= amount;
+            l |= (h & mask) << (half_bitsize - amount);
+            h >>= amount;
+
+            return intbase_t(h, l);
+        }
     }
 
 
@@ -418,7 +572,10 @@ public:
         return intbase_t(~this->upper_half, ~this->lower_half);
     }
 
-
+    constexpr bool operator!() const {
+        return !this->upper_half && !this->lower_half;
+    }
+     
     //
     // relational operators
     //
@@ -560,6 +717,34 @@ public:
 
         return prod_lo;
     }
+
+    
+    //
+    // to string
+    //
+
+ public:
+
+    static std::string to_string(intbase_t sw) {
+        if (!sw.upper_half) {
+            if constexpr (std::is_integral_v<halfint_t>) {
+                return std::to_string(sw.lower_half);
+            }
+            else {
+                return halfint_t::to_string(sw.upper_half);
+            }
+        }
+
+        std::string s;
+        while (sw)
+        {
+            //intbase_t digit = sw % intbase_t(10);
+            sw /= intbase_t(10);
+            s += '0' + 0;// (char)digit;
+        }
+
+        return s;
+    }
 };
 
 
@@ -573,33 +758,164 @@ using int16sw_t = intbase_t<2, true>;
 using uint16sw_t = intbase_t<2, false>;
 
 
+//
+// literals
+//
+
+#define MAKE_LITERAL_OPERATOR(swtype, name)                                 \
+    inline constexpr swtype operator "" name(unsigned long long int val) {  \
+        if (val > static_cast<unsigned long long int>(swtype::max()))       \
+            throw std::exception("literal out of range");                   \
+        return swtype(val);                                                 \
+    }                                                                       \
+
+MAKE_LITERAL_OPERATOR(int16sw_t, _i16sw)
+MAKE_LITERAL_OPERATOR(int32sw_t, _i32sw)
+MAKE_LITERAL_OPERATOR(int64sw_t, _i64sw)
+MAKE_LITERAL_OPERATOR(uint16sw_t, _u16sw)
+MAKE_LITERAL_OPERATOR(uint32sw_t, _u32sw)
+MAKE_LITERAL_OPERATOR(uint64sw_t, _u64sw)
+
+#undef MAKE_LITERAL_OPERATOR
+
+inline int128sw_t operator "" _i128sw(const char * val)
+{
+    // cannot use strlen because its not constexpr???
+    size_t len = 0;
+    for (auto p = val; *p; ++p, ++len);
+
+    int128sw_t out = int128sw_t(0);
+
+    // non-decimal
+    if (val[0] == '0')
+    {
+        if (val[1] == 'x' || val[1] == 'X')
+        {
+            len -= 2;
+            val += 2;
+
+            if (len > (sizeof(int128sw_t) * 2)) {
+                throw std::exception("literal out of range");
+            }
+
+            for (int i = 0; i < len; ++i)
+            {
+                char c = val[len - 1 - i];
+                if (c >= '1' && c <= '9') {
+                    out |= (static_cast<int128sw_t>(c - '0')) << (i * 4);
+                }
+                else if (c >= 'a' && c <= 'f') {
+                    out |= (static_cast<int128sw_t>(10 + c - 'a')) << (i * 4);
+                }
+                else if (c >= 'A' && c <= 'F') {
+                    out |= (static_cast<int128sw_t>(10 + c - 'A')) << (i * 4);
+                }
+                else if (c != '0') {
+                    throw std::exception("invalid hexadecimal literal");
+                }
+            }
+        }
+        else if (val[1] == 'b' || val[1] == 'B')
+        {
+            len -= 2;
+            val += 2;
+
+            if (len > (sizeof(int128sw_t) * 8)) {
+                throw std::exception("literal out of range");
+            }
+
+            for (int i = 0; i < len; ++i)
+            {
+                char c = val[len - 1 - i];
+                if (c == '1') {
+                    out |= int128sw_t(1) << i;
+                }
+                else if (c != '0') {
+                    throw std::exception("invalid binary literal");
+                }
+            }
+        }
+        else
+        {
+            len -= 1;
+            val += 1;
+
+            if (len > (sizeof(int128sw_t) * 3)) {
+                throw std::exception("literal out of range");
+            }
+
+            for (int i = 0; i < len; ++i)
+            {
+                char c = val[len - 1 - i];
+                if (c >= '1' && c <= '7') {
+                    out |= (static_cast<int128sw_t>(c - '0')) << (i * 3);
+                }
+                else if (c != '0') {
+                    throw std::exception("invalid octal literal");
+                }
+            }
+        }
+    }
+    else
+    {
+        int128sw_t j = int128sw_t(1);
+        for (int i = 0; i < len; ++i, j *= int128sw_t(10))
+        {
+            char c = val[len - 1 - i];
+            if (c >= '1' && c <= '9') {
+                uint8_t carry = 0;
+                out = int128sw_t::add_carry(out, static_cast<int128sw_t>(c - '0') * j, carry);
+                if (carry) {
+                    throw std::exception("literal out of range");
+                }
+            }
+            else if (c != '0') {
+                throw std::exception("invalid decimal literal");
+            }
+        }
+    }
+
+    if (out > int128sw_t::max()) {
+        throw std::exception("literal out of range");
+    }
+
+    return out;
+}                                                                     
+
+inline std::string to_string(int16sw_t sw) { return std::to_string(static_cast<int16_t>(sw)); }
+inline std::string to_string(int32sw_t sw) { return std::to_string(static_cast<int32_t>(sw)); }
+inline std::string to_string(int64sw_t sw) { return std::to_string(static_cast<int64_t>(sw)); }
+inline std::string to_string(uint16sw_t sw) { return std::to_string(static_cast<uint16_t>(sw)); }
+inline std::string to_string(uint32sw_t sw) { return std::to_string(static_cast<uint32_t>(sw)); }
+inline std::string to_string(uint64sw_t sw) { return std::to_string(static_cast<uint64_t>(sw)); }
+inline std::string to_string(int128sw_t sw)
+{
+    return int128sw_t::to_string(sw);
+}
+inline std::string to_string(uint128sw_t)
+{
+    return "err";
+}
+
+inline std::wstring to_wstring(int16sw_t sw) { return std::to_wstring(static_cast<int16_t>(sw)); }
+inline std::wstring to_wstring(int32sw_t sw) { return std::to_wstring(static_cast<int32_t>(sw)); }
+inline std::wstring to_wstring(int64sw_t sw) { return std::to_wstring(static_cast<int64_t>(sw)); }
+inline std::wstring to_wstring(uint16sw_t sw) { return std::to_wstring(static_cast<uint16_t>(sw)); }
+inline std::wstring to_wstring(uint32sw_t sw) { return std::to_wstring(static_cast<uint32_t>(sw)); }
+inline std::wstring to_wstring(uint64sw_t sw) { return std::to_wstring(static_cast<uint64_t>(sw)); }
+inline std::wstring to_wstring(int128sw_t)
+{
+    return L"err";
+}
+inline std::wstring to_wstring(uint128sw_t)
+{
+    return L"err";
+}
 
 #if USE_SW_INT128 // detect existence of HW 128-bit integer types
 
 using int128_t = intbase_t<16, true>;
 using uint128_t = intbase_t<16, false>;
-
-template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-constexpr int128_t operator-(integral_t minuend, int128_t subtrahend)
-{
-    return int128_t(minuend) - subtrahend;
-}
-template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-constexpr uint128_t operator-(integral_t minuend, uint128_t subtrahend)
-{
-    return uint128_t(minuend) - subtrahend;
-}
-template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-constexpr bool operator==(integral_t a, int128_t b)
-{
-    return uint128_t(a) == b;
-}
-template<typename integral_t, typename = std::enable_if_t<std::is_integral_v<integral_t>>>
-constexpr bool operator==(integral_t a, uint128_t b)
-{
-    return uint128_t(a) == b;
-}
-
 
 // todo: correct these values
 #define INT128_MIN        (-9223372036854775807i64 - 1)
