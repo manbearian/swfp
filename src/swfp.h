@@ -15,6 +15,7 @@
 #include "swhelp.h"
 #include "swint.h"
 
+
 // Emulate IA32/IA32_64 behavior when outside the bounds of IEEE754
 #define EMULATE_INTEL 1
 
@@ -70,8 +71,8 @@ private:
     static constexpr int bitsize = sizeof(uint_t) * 8;
     static constexpr int exponent_bitsize = fp_traits::exponent_bitsize;
     static constexpr int significand_bitsize = bitsize - exponent_bitsize - 1;
-    static constexpr uint_t exponent_mask = (uint_t(1) << exponent_bitsize) - 1;
-    static constexpr uint_t significand_mask = (uint_t(1) << significand_bitsize) - 1;
+    static constexpr uint_t exponent_mask = (uint_t(1) << exponent_bitsize) - uint_t(1);
+    static constexpr uint_t significand_mask = (uint_t(1) << significand_bitsize) - uint_t(1);
     static constexpr uint_t sign_mask = uint_t(1) << (bitsize - 1);
     static constexpr exponent_t bias = fp_traits::bias;
     static constexpr exponent_t emax = bias;
@@ -99,50 +100,57 @@ public:
     // construct from 32-bit built-in floating-point type
     explicit constexpr floatbase_t(float hwf)
     {
-        if constexpr (format == fp_format::binary16)
+        if constexpr (std::is_same_v<floatbase_t, float32_t>)
         {
-            *this = float16_t(float32_t(hwf));
-        }
-        else if constexpr (format == fp_format::binary32)
-        {
+            static_assert(sizeof(float) == 4, "expecting 'float' to be 4-byte IEEE754 floating-point value");
+            static_assert(std::numeric_limits<float>::is_iec559, "expecting 'float' to be 4-byte IEEE754 floating-point value");
+
             *this = details::bit_cast<floatbase_t>(hwf);
-        }
-        else if constexpr (format == fp_format::binary64)
-        {
-            *this = float64_t(float32_t(hwf));
-        }
-        else if constexpr (format == fp_format::binary128)
-        {
-            *this = float128_t(float32_t(hwf));
         }
         else
         {
-            static_assert(false, "nyi: convert from hw float32");
+            *this = floatbase_t(float32_t(hwf));
         }
     }
 
     // construct from 64-bit built-in floating-point type
     explicit constexpr floatbase_t(double hwf)
     {
-        if constexpr (format == fp_format::binary16)
+        if constexpr (std::is_same_v<floatbase_t, float64_t>)
         {
-            *this = float16_t(float64_t(hwf));
-        }
-        else if constexpr (format == fp_format::binary32)
-        {
-            *this = float32_t(float64_t(hwf));
-        }
-        else if constexpr (format == fp_format::binary64)
-        {
+            static_assert(sizeof(double) == 8, "expecting 'double' to be 8-byte IEEE754 floating-point value");
+            static_assert(std::numeric_limits<double>::is_iec559, "expecting 'double' to be 8-byte IEEE754 floating-point value");
+
             *this = details::bit_cast<floatbase_t>(hwf);
-        }
-        else if constexpr (format == fp_format::binary128)
-        {
-            *this = float128_t(float64_t(hwf));
         }
         else
         {
-            static_assert(false, "nyi: convert from hw float64");
+            *this = floatbase_t(float64_t(hwf));
+        }
+    }
+
+    explicit constexpr floatbase_t(long double hwf)
+    {
+        if constexpr (sizeof(long double) == sizeof(*this))
+        {
+            static_assert(sizeof(long double) >= 8, "expecting 'long double' to be 8-byte (or larger) IEEE754 floating-point value");
+            static_assert(std::numeric_limits<double>::is_iec559, "expecting 'long double' to be 8-byte (or larger) IEEE754 floating-point value");
+
+            *this = details::bit_cast<floatbase_t>(hwf);
+        }
+        else if constexpr (sizeof(long double) == sizeof(double))
+        {
+            *this = floatbase_t(static_cast<double>(hwf));
+        }
+#if 0
+        else if constexpr (sizeof(long double) == 16)
+        {
+            *this = floatbase_t(float128_t(hwf));
+        }
+#endif
+        else
+        {
+            static_assert(false, "nyi: convert from long double");
         }
     }
 
@@ -314,8 +322,11 @@ public:
 
     explicit constexpr operator float() const
     {
-        if constexpr (format == fp_format::binary32)
+        if constexpr (std::is_same_v<float32_t, floatbase_t>)
         {
+            static_assert(sizeof(float) == 4, "expecting 'float' to be 4-byte IEEE754 floating-point value");
+            static_assert(std::numeric_limits<float>::is_iec559, "expecting 'float' to be 4-byte IEEE754 floating-point value");
+
             return details::bit_cast<float>(*this);
         }
         else
@@ -326,8 +337,11 @@ public:
 
     explicit constexpr operator double() const
     {
-        if constexpr (format == fp_format::binary64)
+        if constexpr (std::is_same_v<float64_t, floatbase_t>)
         {
+            static_assert(sizeof(double) == 8, "expecting 'double' to be 8-byte IEEE754 floating-point value");
+            static_assert(std::numeric_limits<double>::is_iec559, "expecting 'double' to be 8-byte IEEE754 floating-point value");
+
             return details::bit_cast<double>(*this);
         }
         else
@@ -335,6 +349,22 @@ public:
             return static_cast<double>(static_cast<float64_t>(*this));
         }
     }
+
+    explicit constexpr operator long double() const
+    {
+        if constexpr (std::is_same_v<float64_t, floatbase_t>)
+        {
+            static_assert(sizeof(long double) >= 8, "expecting 'long double' to be 8-byte (or larger) IEEE754 floating-point value");
+            static_assert(std::numeric_limits<double>::is_iec559, "expecting 'long double' to be 8-byte (or larger) IEEE754 floating-point value");
+
+            return details::bit_cast<double>(*this);
+        }
+        else
+        {
+            return static_cast<long double>(static_cast<float64_t>(*this));
+        }
+    }
+
 
     template<typename T> typename T::uint_t constexpr widen_significand(uint_t significand) const {
         T::uint_t wide_significand = significand;
@@ -498,12 +528,14 @@ public:
         }
     }
 
+#if 0
     explicit constexpr operator floatbase_t<fp_format::binary128>() const
     {
         static_assert(format != fp_format::binary128, "convert from T to T is impossible");
 
         return to_widefp<float128_t>();
     }
+#endif
 
 
     //
@@ -970,7 +1002,14 @@ public:
         }
         else if constexpr (sizeof(uint_t) == 8) {
             constexpr auto bitdiff = bitsize - significand_bitsize;
-            uint64_t zhi, z = _umul128(x, y, &zhi);
+            uint64_t zhi, z = _umul128(l.significand, r.significand, &zhi);
+            roundoff_bits = static_cast<uint_t>(z & significand_mask) << (bitsize - significand_bitsize);;
+            significand = (zhi << bitdiff) | (z >> significand_bitsize);
+        }
+        else if constexpr (sizeof(uint_t) == 16) {
+            static_assert(std::is_same_v<uint_t, uint128sw_t>);
+            constexpr auto bitdiff = bitsize - significand_bitsize;
+            uint_t zhi, z = multiply_extended(l.significand, r.significand, zhi);
             roundoff_bits = static_cast<uint_t>(z & significand_mask) << (bitsize - significand_bitsize);;
             significand = (zhi << bitdiff) | (z >> significand_bitsize);
         }
@@ -1346,8 +1385,39 @@ public:
     }
 };
 
-
 using float16_t = floatbase_t<fp_format::binary16>;
 using float32_t = floatbase_t<fp_format::binary32>;
 using float64_t = floatbase_t<fp_format::binary64>;
+#if 0
 using float128_t = floatbase_t<fp_format::binary128>;
+#endif
+
+inline std::string to_string(float16_t swfp) { return std::to_string(static_cast<float>(swfp)); }
+inline std::string to_string(float32_t swfp) { return std::to_string(static_cast<float>(swfp)); }
+inline std::string to_string(float64_t swfp) { return std::to_string(static_cast<double>(swfp)); }
+#if 0
+inline std::string to_string(float128_t swfp)
+{
+    if constexpr (sizeof(long double) >= sizeof(float128_t)) {
+        return std::to_string(static_cast<long double>(swfp));
+    }
+
+    // print with reduced precision for now
+    return std::to_string(static_cast<double>(swfp));
+}
+#endif
+
+inline std::wstring to_wstring(float16_t swfp) { return std::to_wstring(static_cast<float>(swfp)); }
+inline std::wstring to_wstring(float32_t swfp) { return std::to_wstring(static_cast<float>(swfp)); }
+inline std::wstring to_wstring(float64_t swfp) { return std::to_wstring(static_cast<double>(swfp)); }
+#if 0
+inline std::wstring to_wstring(float128_t swfp)
+{
+    if constexpr (sizeof(long double) >= sizeof(float128_t)) {
+        return std::to_string(static_cast<long double>(swfp));
+    }
+
+    // print with reduced precision for now
+    return std::to_wstring(static_cast<double>(swfp));
+}
+#endif
