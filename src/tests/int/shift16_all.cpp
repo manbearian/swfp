@@ -19,10 +19,11 @@ using std::endl;
 
 void validate_shift(uint16_t x)
 {
-    for (int i = 0; i < (sizeof(uint16_t) * 8); ++i)
+    int N = (sizeof(uint16_t) * 8);
+    for (int i = -1; i <= N; ++i)
     {
         {
-            uint16sw_t a = x;
+            uint16sw_t a = static_cast<uint16sw_t>(x);
             auto c = a << i;
             auto z = x << i;
 
@@ -35,7 +36,7 @@ void validate_shift(uint16_t x)
         }
 
         {
-            uint16sw_t a = x;
+            uint16sw_t a = static_cast<uint16sw_t>(x);
             auto c = a >> i;
             auto z = x >> i;
 
@@ -49,10 +50,10 @@ void validate_shift(uint16_t x)
 
         {
             int16sw_t a = static_cast<int16sw_t>(x);
-            int16_t sx = static_cast<int16sw_t>(x);
+            int16_t sx = static_cast<int16_t>(x);
 
             int16sw_t c = a << i;
-            int16_t z = sx << i;;
+            int16_t z = sx << i;
 
             if (memcmp(&c, &z, sizeof(uint16_t))) {
                 cout << std::hex << "0x" << sx << " << " << i << endl;
@@ -64,7 +65,7 @@ void validate_shift(uint16_t x)
 
         {
             int16sw_t a = static_cast<int16sw_t>(x);
-            int16_t sx = static_cast<int16sw_t>(x);
+            int16_t sx = static_cast<int16_t>(x);
 
             int16sw_t c = a >> i;
             int16_t z = sx >> i;

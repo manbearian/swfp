@@ -36,8 +36,8 @@ void validate_add(uint16_t x, uint16_t y)
     {
         int16sw_t a = static_cast<int16sw_t>(x);
         int16sw_t b = static_cast<int16sw_t>(y);
-        int16_t sx = static_cast<int16sw_t>(x);
-        int16_t sy = static_cast<int16sw_t>(y);
+        int16_t sx = static_cast<int16_t>(x);
+        int16_t sy = static_cast<int16_t>(y);
 
         int16sw_t c = a + b;
         int16_t z = sx + sy;

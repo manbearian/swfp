@@ -34,7 +34,7 @@ void validate_neg(uint16_t x)
 
     {
         int16sw_t a = static_cast<int16sw_t>(x);
-        int16_t sx = static_cast<int16sw_t>(x);
+        int16_t sx = static_cast<int16_t>(x);
 
         int16sw_t c = -a;
         int16_t z = -sx;
