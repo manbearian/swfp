@@ -475,7 +475,7 @@ public:
         else if constexpr (sizeof(intbase_t) == 16)
         {
             if ((amount & 63) != amount) {
-                return intbase_t(this->lower_half << (amount - 64), 0);
+                return intbase_t(this->lower_half << (amount & 63), 0);
             }
 
             intbase_t out;
@@ -525,7 +525,7 @@ public:
                     }
                 }
 
-                return intbase_t(top_half, static_cast<shift_type_t>(this->upper_half) >> amount);
+                return intbase_t(top_half, static_cast<shift_type_t>(this->upper_half) >> (amount & 63));
             }
 
             intbase_t out;

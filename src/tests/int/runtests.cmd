@@ -14,6 +14,8 @@ for %%x in (
 
   basic_init.cpp
 
+  shift_misc.cpp
+
   neg16_all.cpp
   shift16_all.cpp
 
